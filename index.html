@@ -1,0 +1,525 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Retro Ruliad Billiards</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap');
+
+        body {
+            background-color: #000;
+            color: #0f0;
+            font-family: 'Press Start 2P', cursive;
+            margin: 0;
+            height: 100vh;
+            width: 100vw;
+            overflow: hidden;
+            cursor: crosshair;
+        }
+
+        canvas {
+            image-rendering: pixelated;
+            display: block;
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            z-index: 1;
+        }
+
+        .hud {
+            position: absolute;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 95%;
+            max-width: 800px;
+            display: flex;
+            justify-content: space-between;
+            font-size: 10px;
+            text-shadow: 2px 2px 0 #000;
+            color: #aaa;
+            z-index: 10;
+            background: rgba(0, 0, 0, 0.85);
+            padding: 12px;
+            border: 2px solid #333;
+            border-radius: 4px;
+            transition: border-color 0.2s;
+        }
+
+        .hud span { flex: 1; text-align: center; }
+        .hud-highlight { color: #0ff; }
+        .hud-alert { color: #f0f; }
+        .hud-mic { color: #ff0; cursor: pointer; }
+
+        .scanlines {
+            position: absolute;
+            top: 0; left: 0; width: 100vw; height: 100vh;
+            background: linear-gradient(to bottom, rgba(255,255,255,0), rgba(255,255,255,0) 50%, rgba(0,0,0,0.2) 50%, rgba(0,0,0,0.2));
+            background-size: 100% 4px;
+            pointer-events: none;
+            z-index: 5;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="hud" id="ui-panel">
+        <span>DIMENSION: <span id="ui-dim" class="hud-highlight">1</span></span>
+        <span>WINDING: <span id="ui-winding" class="hud-highlight">0</span></span>
+        <span>PRECISION: <span id="ui-precision" class="hud-highlight">0.0000</span></span>
+        <span id="ui-mic" class="hud-mic">[CLICK FOR AUDIO]</span>
+    </div>
+    
+    <canvas id="gameCanvas"></canvas>
+    <div class="scanlines"></div>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        
+        // --- BACKGROUND RULIAD SETUP ---
+        const ruliadCanvas = document.createElement('canvas');
+        const rCtx = ruliadCanvas.getContext('2d');
+        const CA_PIXEL = 6;
+        let CA_W = 1, CA_H = 1, caData;
+        
+        // --- BOARD RULIAD (POOL TABLE) SETUP ---
+        const boardCanvas = document.createElement('canvas');
+        const bCtx = boardCanvas.getContext('2d');
+        const B_CA_SIZE = 80; // 80x80 grid for the board surface
+        boardCanvas.width = B_CA_SIZE;
+        boardCanvas.height = B_CA_SIZE;
+        let bData = new Uint8Array(B_CA_SIZE * B_CA_SIZE);
+        let bDataNext = new Uint8Array(B_CA_SIZE * B_CA_SIZE);
+        let boardCaColorHigh = [0, 255, 150]; // Neon green default
+        
+        let WIDTH = window.innerWidth || 800;
+        let HEIGHT = window.innerHeight || 600;
+        let boardRect = { x: 0, y: 0, size: 0 };
+        
+        let currentRule = 30;
+        let frameCount = 0;
+
+        // Visual Palettes for Dimensions
+        let caColor = [10, 120, 50]; 
+        let munkerColor1 = 'rgba(0, 255, 255, 0.45)';
+        let munkerColor2 = 'rgba(0, 0, 0, 0.65)';
+
+        let gameState = {
+            dimension: 1,
+            winding: 0,
+            precision: "0.0000"
+        };
+
+        // --- AUDIO ENGINE ---
+        let audioCtx, analyser, dataArray;
+        let micEnabled = false;
+        let currentAudioLevel = 0;
+
+        async function initAudio() {
+            if (micEnabled) return;
+            try {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                const source = audioCtx.createMediaStreamSource(stream);
+                analyser = audioCtx.createAnalyser();
+                analyser.fftSize = 256;
+                source.connect(analyser);
+                dataArray = new Uint8Array(analyser.frequencyBinCount);
+                micEnabled = true;
+                document.getElementById('ui-mic').innerText = "SONIC DRIVE: ON";
+                document.getElementById('ui-mic').style.color = "#0f0";
+            } catch (err) {
+                document.getElementById('ui-mic').innerText = "MIC DENIED";
+                document.getElementById('ui-mic').style.color = "#f00";
+            }
+        }
+        document.addEventListener('click', initAudio, { once: true });
+
+        // --- RESIZE ---
+        function resize() {
+            WIDTH = canvas.width = window.innerWidth || 320;
+            HEIGHT = canvas.height = window.innerHeight || 320;
+            
+            // Fix InvalidStateError by ensuring canvas dimensions are at least 1x1
+            CA_W = Math.max(1, Math.ceil(WIDTH / CA_PIXEL));
+            CA_H = Math.max(1, Math.ceil(HEIGHT / CA_PIXEL));
+            
+            ruliadCanvas.width = CA_W;
+            ruliadCanvas.height = CA_H;
+            caData = new Uint8Array(CA_W * CA_H);
+            caData[Math.floor(CA_W / 2)] = 1;
+
+            boardRect.size = Math.max(10, Math.min(WIDTH, HEIGHT) * 0.75);
+            boardRect.x = (WIDTH - boardRect.size) / 2;
+            boardRect.y = (HEIGHT - boardRect.size) / 2 + 20; 
+        }
+
+        window.addEventListener('resize', () => { resize(); initBalls(); });
+
+        // --- DIMENSION LOGIC ---
+        function nextDimension() {
+            gameState.dimension++;
+            document.getElementById('ui-dim').innerText = gameState.dimension;
+            
+            // Flash HUD
+            document.getElementById('ui-panel').style.borderColor = '#f0f';
+            setTimeout(() => document.getElementById('ui-panel').style.borderColor = '#333', 300);
+
+            // Randomize Wolfram Rule (favor interesting ones)
+            const interestingRules = [30, 90, 110, 54, 18, 22, 126, 150];
+            currentRule = interestingRules[Math.floor(Math.random() * interestingRules.length)];
+
+            // Randomize CA Colors
+            caColor = [
+                Math.floor(Math.random() * 200),
+                Math.floor(Math.random() * 200),
+                Math.floor(Math.random() * 200)
+            ];
+
+            // Randomize Board Wave Colors (Keep deep base, shift bright color)
+            boardCaColorHigh = [
+                Math.random() * 100, 
+                150 + Math.random() * 100, 
+                150 + Math.random() * 100
+            ];
+
+            // Randomize Munker-White Illusion Colors
+            const hues = [0, 60, 120, 180, 240, 300];
+            const h1 = hues[Math.floor(Math.random() * hues.length)];
+            const h2 = (h1 + 180) % 360; // Complementary
+            munkerColor1 = `hsla(${h1}, 100%, 50%, 0.45)`;
+            munkerColor2 = `hsla(${h2}, 100%, 20%, 0.65)`;
+
+            // Clear CA boards
+            caData.fill(0);
+            bData.fill(0);
+            if (caData.length > 0) caData[Math.floor(CA_W / 2)] = 1;
+
+            initBalls();
+        }
+
+        // --- PHYSICS & BALLS ---
+        const POCKET_RADIUS = 20; // Size of the corner hole
+
+        class Ball {
+            constructor(x, y, vx, vy, radius) {
+                this.x = x; this.y = y; this.vx = vx; this.vy = vy; this.radius = radius;
+                this.lastCornerHit = 0;
+                this.angle = 0; // Added for rolling animation
+                this.trueColor = '#ff55aa'; 
+            }
+
+            update() {
+                // Apply Sonic Drive (Audio pushes balls away from center)
+                if (micEnabled && currentAudioLevel > 30) {
+                    const cx = boardRect.x + boardRect.size / 2;
+                    const cy = boardRect.y + boardRect.size / 2;
+                    const dx = this.x - cx;
+                    const dy = this.y - cy;
+                    const dist = Math.hypot(dx, dy) || 1;
+                    
+                    // Force inversely proportional to distance, directly proportional to audio
+                    const force = (currentAudioLevel * 0.005) / (dist * 0.01);
+                    this.vx += (dx / dist) * force;
+                    this.vy += (dy / dist) * force;
+                }
+
+                // Speed limit
+                const speed = Math.hypot(this.vx, this.vy);
+                if (speed > 8) {
+                    this.vx = (this.vx / speed) * 8;
+                    this.vy = (this.vy / speed) * 8;
+                }
+
+                this.x += this.vx; 
+                this.y += this.vy;
+                
+                // Rolling animation logic
+                this.angle += speed * 0.1;
+
+                // TRAJECTORY STANDING WAVE INJECTION (Write to Board CA)
+                const caX = Math.floor(((this.x - boardRect.x) / boardRect.size) * B_CA_SIZE);
+                const caY = Math.floor(((this.y - boardRect.y) / boardRect.size) * B_CA_SIZE);
+                
+                let brushRadius = 1; // Default trail
+                if (micEnabled && currentAudioLevel > 15) {
+                    brushRadius = Math.floor(currentAudioLevel / 15); // Expands wave based on voice!
+                }
+                
+                for(let dy = -brushRadius; dy <= brushRadius; dy++) {
+                    for(let dx = -brushRadius; dx <= brushRadius; dx++) {
+                        if(dx*dx + dy*dy <= brushRadius*brushRadius) {
+                            const nx = caX + dx, ny = caY + dy;
+                            if(nx >= 0 && nx < B_CA_SIZE && ny >= 0 && ny < B_CA_SIZE) {
+                                bData[ny * B_CA_SIZE + nx] = 255;
+                            }
+                        }
+                    }
+                }
+
+                // 1. POCKET SINK LOGIC (Check BEFORE walls bounce the ball away)
+                const corners = [
+                    {x: boardRect.x, y: boardRect.y},
+                    {x: boardRect.x + boardRect.size, y: boardRect.y},
+                    {x: boardRect.x, y: boardRect.y + boardRect.size},
+                    {x: boardRect.x + boardRect.size, y: boardRect.y + boardRect.size}
+                ];
+                
+                const dists = corners.map(c => Math.hypot(this.x - c.x, this.y - c.y));
+                const minDist = Math.min(...dists);
+                
+                // If ball gets within pocket radius + its own radius, it falls in!
+                if (minDist < POCKET_RADIUS + this.radius) {
+                    nextDimension();
+                    return; // Exit physics loop, ball resets in new dimension
+                }
+
+                // 2. STANDARD WALL COLLISION
+                const minX = boardRect.x + this.radius;
+                const maxX = boardRect.x + boardRect.size - this.radius;
+                const minY = boardRect.y + this.radius;
+                const maxY = boardRect.y + boardRect.size - this.radius;
+
+                let hitWall = false;
+                if (this.x <= minX) { this.x = minX; this.vx *= -1; hitWall = true; }
+                if (this.x >= maxX) { this.x = maxX; this.vx *= -1; hitWall = true; }
+                if (this.y <= minY) { this.y = minY; this.vy *= -1; hitWall = true; }
+                if (this.y >= maxY) { this.y = maxY; this.vy *= -1; hitWall = true; }
+
+                // 3. NILS BERGLAND CORNER/PRECISION LOGIC
+                const detectionRadius = 50; 
+                if (hitWall && minDist < detectionRadius && frameCount - this.lastCornerHit > 15) {
+                    gameState.winding++;
+                    const calcPrecision = 1 - (minDist / detectionRadius);
+                    gameState.precision = calcPrecision.toFixed(4);
+                    this.lastCornerHit = frameCount;
+                    
+                    document.getElementById('ui-winding').innerText = gameState.winding;
+                    document.getElementById('ui-precision').innerText = gameState.precision;
+                    document.getElementById('ui-panel').style.borderColor = '#0ff';
+                    setTimeout(() => document.getElementById('ui-panel').style.borderColor = '#333', 150);
+                }
+            }
+
+            draw(ctx) {
+                ctx.save();
+                ctx.translate(this.x, this.y);
+                ctx.rotate(this.angle);
+
+                // Main Ball
+                ctx.fillStyle = this.trueColor;
+                ctx.beginPath();
+                ctx.arc(0, 0, this.radius, 0, Math.PI * 2);
+                ctx.fill();
+
+                // Rolling offset/texture
+                ctx.fillStyle = 'rgba(0, 0, 0, 0.45)';
+                ctx.beginPath();
+                ctx.arc(this.radius * 0.35, 0, this.radius * 0.4, 0, Math.PI * 2);
+                ctx.fill();
+
+                ctx.restore();
+            }
+        }
+
+        let balls = [];
+        function initBalls() {
+            balls = [
+                new Ball(boardRect.x + boardRect.size*0.3, boardRect.y + boardRect.size*0.5, 3.5, 2.8, 14),
+                new Ball(boardRect.x + boardRect.size*0.7, boardRect.y + boardRect.size*0.5, -2.8, -3.5, 14)
+            ];
+        }
+
+        // --- RENDERING ---
+        function updateBackgroundRuliad() {
+            if (CA_W <= 0 || CA_H <= 0) return;
+
+            for (let y = CA_H - 1; y > 0; y--) {
+                for (let x = 0; x < CA_W; x++) {
+                    caData[y * CA_W + x] = caData[(y - 1) * CA_W + x];
+                }
+            }
+            
+            // PSYCHEDELIC AUDIO RULIAD GENERATOR
+            if (micEnabled && currentAudioLevel > 10) {
+                const step = Math.max(1, Math.floor((dataArray.length / 2) / CA_W));
+                for (let x = 0; x < CA_W; x++) {
+                    const audioVal = dataArray[x * step] || 0;
+                    caData[x] = (audioVal > 70 + Math.random() * 50) ? 1 : 0;
+                }
+            } else {
+                for (let x = 0; x < CA_W; x++) {
+                    const left = caData[x === 0 ? CA_W - 1 : x - 1] ? 4 : 0;
+                    const center = caData[x] ? 2 : 0;
+                    const right = caData[x === CA_W - 1 ? 0 : x + 1] ? 1 : 0;
+                    caData[x] = (currentRule & (1 << (left + center + right))) ? 1 : 0;
+                }
+            }
+
+            const imgData = rCtx.createImageData(CA_W, CA_H);
+            const basePhase = gameState.dimension * 50 + frameCount * 3;
+
+            for (let y = 0; y < CA_H; y++) {
+                const r = Math.sin((basePhase + y * 4) * 0.05) * 127 + 128;
+                const g = Math.sin((basePhase + y * 4 + 120) * 0.05) * 127 + 128;
+                const b = Math.sin((basePhase + y * 4 + 240) * 0.05) * 127 + 128;
+
+                for (let x = 0; x < CA_W; x++) {
+                    const i = y * CA_W + x;
+                    const isActive = caData[i] > 0;
+                    const idx = i * 4;
+                    
+                    if (isActive) {
+                        imgData.data[idx] = r;       
+                        imgData.data[idx+1] = g;   
+                        imgData.data[idx+2] = b;    
+                        imgData.data[idx+3] = 255;
+                    } else {
+                        imgData.data[idx] = 0;       
+                        imgData.data[idx+1] = 5;   
+                        imgData.data[idx+2] = 10;    
+                        imgData.data[idx+3] = 255;
+                    }                   
+                }
+            }
+            rCtx.putImageData(imgData, 0, 0);
+        }
+
+        function updateBoardCA() {
+            // 2D Cellular Automaton logic for the Pool Table (Parity Rule)
+            for (let y = 0; y < B_CA_SIZE; y++) {
+                for (let x = 0; x < B_CA_SIZE; x++) {
+                    const i = y * B_CA_SIZE + x;
+                    let n = 0;
+                    
+                    // Count active neighbors (Von Neumann neighborhood)
+                    if (y > 0 && bData[i - B_CA_SIZE] > 128) n++;
+                    if (y < B_CA_SIZE - 1 && bData[i + B_CA_SIZE] > 128) n++;
+                    if (x > 0 && bData[i - 1] > 128) n++;
+                    if (x < B_CA_SIZE - 1 && bData[i + 1] > 128) n++;
+
+                    // Fredkin's Parity Rule creates beautiful Sierpinski-like fractals
+                    if (n % 2 !== 0 && n > 0) {
+                        bDataNext[i] = 255; 
+                    } else {
+                        // Fade out old signals to create a "trajectory trail"
+                        bDataNext[i] = Math.max(0, bData[i] - 8); 
+                    }
+                }
+            }
+
+            const imgData = bCtx.createImageData(B_CA_SIZE, B_CA_SIZE);
+            for (let i = 0; i < B_CA_SIZE * B_CA_SIZE; i++) {
+                bData[i] = bDataNext[i]; // Apply buffer
+                const val = bData[i];
+                const idx = i * 4;
+                
+                // Interpolate from Deep Blue/Green base to High Neon Color
+                imgData.data[idx] = Math.floor(0 + (boardCaColorHigh[0] - 0) * (val / 255));
+                imgData.data[idx+1] = Math.floor(10 + (boardCaColorHigh[1] - 10) * (val / 255));
+                imgData.data[idx+2] = Math.floor(30 + (boardCaColorHigh[2] - 30) * (val / 255));
+                imgData.data[idx+3] = 255;
+            }
+            bCtx.putImageData(imgData, 0, 0);
+        }
+
+        function drawBoard() {
+            // Draw Trajectory Standing Wave Ruliad Surface
+            ctx.imageSmoothingEnabled = false;
+            ctx.drawImage(boardCanvas, boardRect.x, boardRect.y, boardRect.size, boardRect.size);
+
+            // Retro Boundary
+            ctx.strokeStyle = '#444';
+            ctx.lineWidth = 4;
+            ctx.strokeRect(boardRect.x, boardRect.y, boardRect.size, boardRect.size);
+
+            // Draw Pockets
+            ctx.fillStyle = '#000';
+            ctx.strokeStyle = '#fff';
+            ctx.lineWidth = 2;
+            const corners = [
+                {x: boardRect.x, y: boardRect.y},
+                {x: boardRect.x + boardRect.size, y: boardRect.y},
+                {x: boardRect.x, y: boardRect.y + boardRect.size},
+                {x: boardRect.x + boardRect.size, y: boardRect.y + boardRect.size}
+            ];
+            corners.forEach(c => {
+                ctx.beginPath();
+                ctx.arc(c.x, c.y, POCKET_RADIUS, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.stroke();
+            });
+        }
+
+        function drawMunkerWhiteIllusion() {
+            ctx.save();
+            ctx.beginPath();
+            ctx.rect(boardRect.x, boardRect.y, boardRect.size, boardRect.size);
+            ctx.clip();
+            
+            const stripeH = CA_PIXEL * 1.5; 
+            const offset = (frameCount * 0.5) % (stripeH * 2); 
+            
+            for (let y = boardRect.y - stripeH * 2; y < boardRect.y + boardRect.size; y += stripeH * 2) {
+                // Munker distortion reacts slightly to audio
+                const wave = (micEnabled && currentAudioLevel > 10) ? Math.sin((y + frameCount) * 0.1) * (currentAudioLevel * 0.1) : 0;
+
+                ctx.fillStyle = munkerColor1; 
+                ctx.fillRect(boardRect.x, y + offset + wave, boardRect.size, stripeH);
+                ctx.fillStyle = munkerColor2;
+                ctx.fillRect(boardRect.x, y + stripeH + offset + wave, boardRect.size, stripeH);
+            }
+            ctx.restore();
+        }
+
+        function loop() {
+            frameCount++;
+
+            // Audio Analysis
+            if (micEnabled) {
+                analyser.getByteFrequencyData(dataArray);
+                let sum = 0;
+                for(let i=0; i<dataArray.length; i++) sum += dataArray[i];
+                currentAudioLevel = sum / dataArray.length;
+            }
+
+            if (frameCount % 4 === 0) updateBackgroundRuliad();
+            
+            // The Pool Table runs its own 2D CA constantly
+            updateBoardCA();
+
+            ctx.fillStyle = '#000';
+            ctx.fillRect(0, 0, WIDTH, HEIGHT);
+
+            // 1. Ruliad Background
+            if (ruliadCanvas.width > 0 && ruliadCanvas.height > 0) {
+                ctx.imageSmoothingEnabled = false;
+                ctx.drawImage(ruliadCanvas, 0, 0, WIDTH, HEIGHT);
+            }
+
+            // 2. The Board (which now contains the internal Trajectory Standing Wave)
+            drawBoard();
+
+            // 3. Balls Physics & Rendering
+            balls.forEach(b => {
+                b.update();
+                b.draw(ctx);
+            });
+
+            // 4. Munker-White Illusion
+            drawMunkerWhiteIllusion();
+
+            requestAnimationFrame(loop);
+        }
+
+        resize();
+        initBalls();
+        loop();
+    </script>
+</body>
+</html>
