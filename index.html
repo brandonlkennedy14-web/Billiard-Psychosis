@@ -36,7 +36,7 @@
             left: 50%;
             transform: translateX(-50%);
             width: 95%;
-            max-width: 800px;
+            max-width: 900px;
             display: flex;
             justify-content: space-between;
             font-size: 10px;
@@ -68,7 +68,7 @@
 <body>
 
     <div class="hud" id="ui-panel">
-        <span>DIMENSION: <span id="ui-dim" class="hud-highlight">1</span></span>
+        <span>DIM: <span id="ui-dim" class="hud-highlight">1 (SQUARE)</span></span>
         <span>WINDING: <span id="ui-winding" class="hud-highlight">0</span></span>
         <span>PRECISION: <span id="ui-precision" class="hud-highlight">0.0000</span></span>
         <span id="ui-mic" class="hud-mic">[CLICK FOR AUDIO]</span>
@@ -90,31 +90,31 @@
         // --- BOARD RULIAD (POOL TABLE) SETUP ---
         const boardCanvas = document.createElement('canvas');
         const bCtx = boardCanvas.getContext('2d');
-        const B_CA_SIZE = 80; 
+        const B_CA_SIZE = 100; // Increased density for standing wave texture
         boardCanvas.width = B_CA_SIZE;
         boardCanvas.height = B_CA_SIZE;
         
-        // Dual buffer system: CA logic and Trail/Voice logic
         let bData = new Uint8Array(B_CA_SIZE * B_CA_SIZE);
         let bDataNext = new Uint8Array(B_CA_SIZE * B_CA_SIZE);
-        let trailData = new Uint8Array(B_CA_SIZE * B_CA_SIZE); // Tracks balls and voice
+        let trailData = new Uint8Array(B_CA_SIZE * B_CA_SIZE); 
         
-        // The Four Colors (Board Base, CA Output, Ball Trail, Voice Input)
-        let colBoardBg = [10, 20, 35];     // Deep Navy
-        let colBoardCA = [0, 255, 150];    // Neon Green Parity
-        let colTrail   = [255, 0, 150];    // Hot Pink Ball Trail
-        let colVoice   = [255, 255, 0];    // Bright Yellow Voice Standing Wave
+        let colBoardBg = [10, 20, 35];     
+        let colBoardCA = [0, 255, 150];    
+        let colTrail   = [255, 0, 150];    
+        let colVoice   = [255, 255, 0];    
         
         let WIDTH = window.innerWidth || 800;
         let HEIGHT = window.innerHeight || 600;
+        
+        // Dynamic Geometry State
+        let boardPoly = { sides: 4, cx: 0, cy: 0, r: 0, vertices: [] };
         let boardRect = { x: 0, y: 0, size: 0 };
         
         let currentRule = 30;
         let frameCount = 0;
+        let baseMunkerHue = 0; // Drifts endlessly
 
-        // Visual Palettes for Dimensions
-        let munkerColor1 = 'rgba(0, 255, 255, 1)'; // Solid Cyan
-        let munkerColor2 = 'rgba(255, 0, 255, 1)'; // Solid Magenta
+        const SHAPE_NAMES = { 3: 'TRIANGLE', 4: 'SQUARE', 5: 'PENTAGON', 6: 'HEXAGON', 8: 'OCTAGON' };
 
         let gameState = {
             dimension: 1,
@@ -149,6 +149,25 @@
         }
         document.addEventListener('click', initAudio, { once: true });
 
+        // --- GEOMETRY GENERATOR ---
+        function generateGeometry(sides) {
+            const cx = WIDTH / 2;
+            const cy = HEIGHT / 2 + 20;
+            const R = Math.max(10, Math.min(WIDTH, HEIGHT) * 0.4); 
+            
+            let verts = [];
+            // Start angle offsets to make shapes sit flat at the bottom
+            let startAngle = sides % 2 === 0 ? Math.PI / sides : -Math.PI / 2; 
+            
+            for(let i=0; i<sides; i++) {
+                let angle = startAngle + (i * 2 * Math.PI / sides);
+                verts.push({ x: cx + R * Math.cos(angle), y: cy + R * Math.sin(angle) });
+            }
+            
+            boardPoly = { sides, cx, cy, r: R, vertices: verts };
+            boardRect = { x: cx - R, y: cy - R, size: R * 2 };
+        }
+
         // --- RESIZE ---
         function resize() {
             WIDTH = canvas.width = window.innerWidth || 320;
@@ -162,88 +181,88 @@
             caData = new Uint8Array(CA_W * CA_H);
             caData[Math.floor(CA_W / 2)] = 1;
 
-            boardRect.size = Math.max(10, Math.min(WIDTH, HEIGHT) * 0.75);
-            boardRect.x = (WIDTH - boardRect.size) / 2;
-            boardRect.y = (HEIGHT - boardRect.size) / 2 + 20; 
+            generateGeometry(boardPoly.sides);
         }
 
-        window.addEventListener('resize', () => { resize(); initBalls(); });
+        window.addEventListener('resize', () => { resize(); initBall(); });
 
         // --- DIMENSION LOGIC ---
         function nextDimension() {
             gameState.dimension++;
-            document.getElementById('ui-dim').innerText = gameState.dimension;
             
             document.getElementById('ui-panel').style.borderColor = '#f0f';
             setTimeout(() => document.getElementById('ui-panel').style.borderColor = '#333', 300);
 
+            // Morph the world geometry
+            const possibleSides = [3, 4, 5, 6, 8];
+            const newSides = possibleSides[Math.floor(Math.random() * possibleSides.length)];
+            generateGeometry(newSides);
+            
+            document.getElementById('ui-dim').innerText = `${gameState.dimension} (${SHAPE_NAMES[newSides]})`;
+
             const interestingRules = [30, 90, 110, 54, 18, 22, 126, 150];
             currentRule = interestingRules[Math.floor(Math.random() * interestingRules.length)];
 
-            // Randomize Colors for the new dimension
+            // Randomize Parity Board & Standing Wave Colors
             colBoardBg = [Math.random()*30, Math.random()*30, Math.random()*50];
             colBoardCA = [Math.random()*255, Math.random()*255, Math.random()*255];
             colTrail   = [Math.random()*255, Math.random()*255, Math.random()*255];
             colVoice   = [Math.random()*255, Math.random()*255, Math.random()*255];
 
-            const hues = [0, 60, 120, 180, 240, 300];
-            const h1 = hues[Math.floor(Math.random() * hues.length)];
-            const h2 = (h1 + 180) % 360; 
-            munkerColor1 = `hsla(${h1}, 100%, 50%, 1)`; // Solid
-            munkerColor2 = `hsla(${h2}, 100%, 50%, 1)`; // Solid
+            // Add a jolt to the Munker Hue
+            baseMunkerHue = (baseMunkerHue + 90) % 360;
 
             caData.fill(0);
             bData.fill(0);
             trailData.fill(0);
             if (caData.length > 0) caData[Math.floor(CA_W / 2)] = 1;
 
-            initBalls();
+            initBall();
         }
 
-        // --- PHYSICS & BALLS ---
-        const POCKET_RADIUS = 20;
+        // --- PHYSICS & BALL ---
+        const POCKET_RADIUS = 22;
 
         class Ball {
             constructor(x, y, vx, vy, radius) {
                 this.x = x; this.y = y; this.vx = vx; this.vy = vy; this.radius = radius;
                 this.lastCornerHit = 0;
                 this.angle = 0; 
-                this.trueColor = '#bbaaff'; // A neutral, light color works best for Munker-White assimilation
+                this.trueColor = '#e0e0e0'; // Neutral bright sphere absorbs Munker-White stripes perfectly
             }
 
             update() {
+                // Sonic Drive Impulse
                 if (micEnabled && currentAudioLevel > 30) {
-                    const cx = boardRect.x + boardRect.size / 2;
-                    const cy = boardRect.y + boardRect.size / 2;
-                    const dx = this.x - cx;
-                    const dy = this.y - cy;
+                    const dx = this.x - boardPoly.cx;
+                    const dy = this.y - boardPoly.cy;
                     const dist = Math.hypot(dx, dy) || 1;
                     
-                    const force = (currentAudioLevel * 0.005) / (dist * 0.01);
+                    const force = (currentAudioLevel * 0.006) / (dist * 0.01);
                     this.vx += (dx / dist) * force;
                     this.vy += (dy / dist) * force;
                 }
 
                 const speed = Math.hypot(this.vx, this.vy);
-                if (speed > 8) {
-                    this.vx = (this.vx / speed) * 8;
-                    this.vy = (this.vy / speed) * 8;
+                if (speed > 9) {
+                    this.vx = (this.vx / speed) * 9;
+                    this.vy = (this.vy / speed) * 9;
                 }
 
                 this.x += this.vx; 
                 this.y += this.vy;
                 this.angle += speed * 0.08;
 
-                // Write to the Trail/Voice Array (Standing Wave Injection)
+                // Write Standing Wave Trajectory
                 const caX = Math.floor(((this.x - boardRect.x) / boardRect.size) * B_CA_SIZE);
                 const caY = Math.floor(((this.y - boardRect.y) / boardRect.size) * B_CA_SIZE);
                 
                 let brushRadius = 1;
-                let injectionHeat = 120; // Normal trail heat
+                let injectionHeat = 150; 
                 
                 if (micEnabled && currentAudioLevel > 20) {
                     brushRadius = Math.max(2, Math.floor(currentAudioLevel / 15));
-                    injectionHeat = 255; // Max heat triggers Voice Color
+                    injectionHeat = 255; 
                 }
                 
                 for(let dy = -brushRadius; dy <= brushRadius; dy++) {
@@ -251,45 +270,67 @@
                         if(dx*dx + dy*dy <= brushRadius*brushRadius) {
                             const nx = caX + dx, ny = caY + dy;
                             if(nx >= 0 && nx < B_CA_SIZE && ny >= 0 && ny < B_CA_SIZE) {
-                                // Add to board CA buffer for parallax ripples
                                 bData[ny * B_CA_SIZE + nx] = 255;
-                                // Add to trail data for the 4-color distinction
                                 trailData[ny * B_CA_SIZE + nx] = injectionHeat;
                             }
                         }
                     }
                 }
 
-                const corners = [
-                    {x: boardRect.x, y: boardRect.y},
-                    {x: boardRect.x + boardRect.size, y: boardRect.y},
-                    {x: boardRect.x, y: boardRect.y + boardRect.size},
-                    {x: boardRect.x + boardRect.size, y: boardRect.y + boardRect.size}
-                ];
-                
-                const dists = corners.map(c => Math.hypot(this.x - c.x, this.y - c.y));
-                const minDist = Math.min(...dists);
-                
-                if (minDist < POCKET_RADIUS + this.radius) {
-                    nextDimension();
-                    return; 
+                // 1. POCKET SINK LOGIC (Pre-check vertices)
+                for (let v of boardPoly.vertices) {
+                    if (Math.hypot(this.x - v.x, this.y - v.y) < POCKET_RADIUS + this.radius * 0.5) {
+                        nextDimension();
+                        return; 
+                    }
                 }
 
-                const minX = boardRect.x + this.radius;
-                const maxX = boardRect.x + boardRect.size - this.radius;
-                const minY = boardRect.y + this.radius;
-                const maxY = boardRect.y + boardRect.size - this.radius;
-
+                // 2. POLYGON EDGE COLLISION (Infinite Plane Approach)
                 let hitWall = false;
-                if (this.x <= minX) { this.x = minX; this.vx *= -1; hitWall = true; }
-                if (this.x >= maxX) { this.x = maxX; this.vx *= -1; hitWall = true; }
-                if (this.y <= minY) { this.y = minY; this.vy *= -1; hitWall = true; }
-                if (this.y >= maxY) { this.y = maxY; this.vy *= -1; hitWall = true; }
+                let minDistToVertex = Infinity;
 
+                for(let i=0; i<boardPoly.sides; i++) {
+                    let A = boardPoly.vertices[i];
+                    let B = boardPoly.vertices[(i+1)%boardPoly.sides];
+                    
+                    // Edge normal
+                    let nx = -(B.y - A.y);
+                    let ny = (B.x - A.x);
+                    let len = Math.hypot(nx, ny);
+                    nx /= len; ny /= len;
+                    
+                    // Ensure normal points inward towards polygon center
+                    if (nx * (boardPoly.cx - A.x) + ny * (boardPoly.cy - A.y) < 0) {
+                        nx = -nx; ny = -ny;
+                    }
+                    
+                    // Distance from ball to edge plane
+                    let distToPlane = (this.x - A.x) * nx + (this.y - A.y) * ny;
+                    
+                    if (distToPlane < this.radius) {
+                        // Push out to resolve penetration
+                        this.x += nx * (this.radius - distToPlane);
+                        this.y += ny * (this.radius - distToPlane);
+                        
+                        // Reflect velocity if moving toward the plane
+                        let dot = this.vx * nx + this.vy * ny;
+                        if (dot < 0) {
+                            this.vx -= 2 * dot * nx;
+                            this.vy -= 2 * dot * ny;
+                            hitWall = true;
+                        }
+                    }
+                    
+                    // Track nearest vertex for Precision math
+                    let dToV = Math.hypot(this.x - A.x, this.y - A.y);
+                    if (dToV < minDistToVertex) minDistToVertex = dToV;
+                }
+
+                // 3. NILS BERGLAND PRECISION LOGIC
                 const detectionRadius = 50; 
-                if (hitWall && minDist < detectionRadius && frameCount - this.lastCornerHit > 15) {
+                if (hitWall && minDistToVertex < detectionRadius && frameCount - this.lastCornerHit > 15) {
                     gameState.winding++;
-                    const calcPrecision = 1 - (minDist / detectionRadius);
+                    const calcPrecision = 1 - (minDistToVertex / detectionRadius);
                     gameState.precision = calcPrecision.toFixed(4);
                     this.lastCornerHit = frameCount;
                     
@@ -305,38 +346,36 @@
                 ctx.translate(this.x, this.y);
                 
                 // Shadow
-                ctx.fillStyle = 'rgba(0,0,0,0.5)';
+                ctx.fillStyle = 'rgba(0,0,0,0.6)';
                 ctx.beginPath(); ctx.arc(4, 4, this.radius, 0, Math.PI * 2); ctx.fill();
 
-                // Rotate for the rolling effect
+                // Rotate
                 ctx.rotate(this.angle);
 
-                // Base Sphere
+                // Sphere
                 ctx.fillStyle = this.trueColor;
                 ctx.beginPath(); ctx.arc(0, 0, this.radius, 0, Math.PI * 2); ctx.fill();
 
-                // Billiard Inner White Circle
+                // Inner White Ring
                 ctx.fillStyle = '#fff';
                 ctx.beginPath(); ctx.arc(this.radius*0.2, 0, this.radius * 0.5, 0, Math.PI * 2); ctx.fill();
                 
-                // Billiard Number/Dot
+                // Center Dot
                 ctx.fillStyle = '#000';
                 ctx.beginPath(); ctx.arc(this.radius*0.2, 0, this.radius * 0.2, 0, Math.PI * 2); ctx.fill();
 
                 ctx.restore();
 
-                // Specular Light Highlight (Static, does not rotate)
-                ctx.fillStyle = 'rgba(255,255,255,0.7)';
+                // Specular Light Highlight
+                ctx.fillStyle = 'rgba(255,255,255,0.8)';
                 ctx.beginPath(); ctx.arc(this.x - this.radius*0.3, this.y - this.radius*0.3, this.radius*0.2, 0, Math.PI * 2); ctx.fill();
             }
         }
 
-        let balls = [];
-        function initBalls() {
-            balls = [
-                new Ball(boardRect.x + boardRect.size*0.3, boardRect.y + boardRect.size*0.5, 3.5, 2.8, 16),
-                new Ball(boardRect.x + boardRect.size*0.7, boardRect.y + boardRect.size*0.5, -2.8, -3.5, 16)
-            ];
+        let playerBall;
+        function initBall() {
+            // Drop ball near center
+            playerBall = new Ball(boardPoly.cx - 20, boardPoly.cy - 20, 3.5, 2.8, 16);
         }
 
         // --- RENDERING ---
@@ -386,12 +425,10 @@
         }
 
         function updateBoardCA() {
-            // Fade Trail/Voice Data
             for(let i = 0; i < trailData.length; i++) {
-                if(trailData[i] > 0) trailData[i] = Math.max(0, trailData[i] - 4);
+                if(trailData[i] > 0) trailData[i] = Math.max(0, trailData[i] - 3);
             }
 
-            // Parity Rule for Board Geometry
             for (let y = 0; y < B_CA_SIZE; y++) {
                 for (let x = 0; x < B_CA_SIZE; x++) {
                     const i = y * B_CA_SIZE + x;
@@ -405,7 +442,7 @@
                     if (n % 2 !== 0 && n > 0) {
                         bDataNext[i] = 255; 
                     } else {
-                        bDataNext[i] = Math.max(0, bData[i] - 10); 
+                        bDataNext[i] = Math.max(0, bData[i] - 15); 
                     }
                 }
             }
@@ -414,7 +451,6 @@
             for (let i = 0; i < B_CA_SIZE * B_CA_SIZE; i++) {
                 bData[i] = bDataNext[i]; 
                 
-                // Color Logic (4 Colors)
                 let r = colBoardBg[0], g = colBoardBg[1], b = colBoardBg[2];
 
                 if (bData[i] > 128) {
@@ -423,9 +459,7 @@
 
                 if (trailData[i] > 0) {
                     let t = trailData[i] / 255; 
-                    // Voice is high value (yellow), standard trail is mid value (pink)
-                    let targetCol = trailData[i] > 150 ? colVoice : colTrail;
-                    
+                    let targetCol = trailData[i] > 180 ? colVoice : colTrail;
                     r = r * (1-t) + targetCol[0] * t;
                     g = g * (1-t) + targetCol[1] * t;
                     b = b * (1-t) + targetCol[2] * t;
@@ -440,48 +474,64 @@
             bCtx.putImageData(imgData, 0, 0);
         }
 
+        function traceBoardPath(ctx) {
+            ctx.beginPath();
+            ctx.moveTo(boardPoly.vertices[0].x, boardPoly.vertices[0].y);
+            for(let i=1; i<boardPoly.sides; i++) {
+                ctx.lineTo(boardPoly.vertices[i].x, boardPoly.vertices[i].y);
+            }
+            ctx.closePath();
+        }
+
         function drawBoard() {
+            ctx.save();
+            traceBoardPath(ctx);
+            ctx.clip(); // Mask CA render to Polygon
+
             ctx.imageSmoothingEnabled = false;
             ctx.drawImage(boardCanvas, boardRect.x, boardRect.y, boardRect.size, boardRect.size);
+            ctx.restore();
 
+            // Polygon Boundary Stroke
             ctx.strokeStyle = '#444';
             ctx.lineWidth = 4;
-            ctx.strokeRect(boardRect.x, boardRect.y, boardRect.size, boardRect.size);
+            traceBoardPath(ctx);
+            ctx.stroke();
 
+            // Draw Pockets at Vertices
             ctx.fillStyle = '#000';
             ctx.strokeStyle = '#fff';
             ctx.lineWidth = 2;
-            const corners = [
-                {x: boardRect.x, y: boardRect.y},
-                {x: boardRect.x + boardRect.size, y: boardRect.y},
-                {x: boardRect.x, y: boardRect.y + boardRect.size},
-                {x: boardRect.x + boardRect.size, y: boardRect.y + boardRect.size}
-            ];
-            corners.forEach(c => {
+            
+            boardPoly.vertices.forEach(v => {
                 ctx.beginPath();
-                ctx.arc(c.x, c.y, POCKET_RADIUS, 0, Math.PI * 2);
+                ctx.arc(v.x, v.y, POCKET_RADIUS, 0, Math.PI * 2);
                 ctx.fill();
                 ctx.stroke();
             });
         }
 
-        function drawMunkerWhiteIllusion() {
-            // True Munker-White: Solid, highly contrasting intersecting lines
+        function drawDynamicMunkerWhite() {
             ctx.save();
-            ctx.beginPath();
-            ctx.rect(boardRect.x, boardRect.y, boardRect.size, boardRect.size);
-            ctx.clip();
+            traceBoardPath(ctx);
+            ctx.clip(); 
             
-            const stripeH = CA_PIXEL; // Thin, sharp stripes
+            // Thin lines maximize assimilation illusion
+            const stripeH = 3; 
             
-            // The stripes remain static to perfectly trick assimilation as balls roll beneath them
+            // Endlessly drifting complementary colors
+            baseMunkerHue = (baseMunkerHue + 0.15) % 360;
+            const h1 = baseMunkerHue;
+            const h2 = (baseMunkerHue + 180) % 360; // Perfect mathematical complementary
+            
+            const color1 = `hsla(${h1}, 100%, 50%, 0.8)`;
+            const color2 = `hsla(${h2}, 100%, 50%, 0.8)`;
+            
             for (let y = boardRect.y; y < boardRect.y + boardRect.size; y += stripeH * 4) {
-                // Color 1 line
-                ctx.fillStyle = munkerColor1; 
+                ctx.fillStyle = color1; 
                 ctx.fillRect(boardRect.x, y, boardRect.size, stripeH);
                 
-                // Color 2 line
-                ctx.fillStyle = munkerColor2;
+                ctx.fillStyle = color2;
                 ctx.fillRect(boardRect.x, y + stripeH * 2, boardRect.size, stripeH);
             }
             ctx.restore();
@@ -512,36 +562,37 @@
                 ctx.drawImage(ruliadCanvas, 0, 0, WIDTH, HEIGHT);
             }
 
-            // Draw Board and internal standing wave patterns
+            // Draw Polygon Board
             drawBoard();
 
-            const cx = boardRect.x + boardRect.size / 2;
-            const cy = boardRect.y + boardRect.size / 2;
+            // Sonic Shockwaves
             for (let i = shockwaves.length - 1; i >= 0; i--) {
                 let sw = shockwaves[i];
                 sw.r += sw.force * 0.15; 
                 ctx.strokeStyle = sw.color;
-                ctx.globalAlpha = 1 - sw.r/(boardRect.size*0.7);
+                ctx.globalAlpha = Math.max(0, 1 - sw.r/(boardPoly.r * 1.5));
                 ctx.lineWidth = 5;
-                ctx.beginPath(); ctx.arc(cx, cy, sw.r, 0, Math.PI*2); ctx.stroke();
+                ctx.beginPath(); ctx.arc(boardPoly.cx, boardPoly.cy, sw.r, 0, Math.PI*2); ctx.stroke();
                 ctx.globalAlpha = 1;
-                if (sw.r > boardRect.size * 0.75) shockwaves.splice(i, 1);
+                if (sw.r > boardPoly.r * 2) shockwaves.splice(i, 1);
             }
 
-            // Draw Balls
-            balls.forEach(b => {
-                b.update();
-                b.draw(ctx);
-            });
+            // Single Ball Update & Draw
+            if (playerBall) {
+                playerBall.update();
+                playerBall.draw(ctx);
+            }
 
-            // Draw True Munker-White Overlay
-            drawMunkerWhiteIllusion();
+            // Munker-White Harmonics
+            drawDynamicMunkerWhite();
 
             requestAnimationFrame(loop);
         }
 
+        // Init
+        generateGeometry(4); // Start with square
         resize();
-        initBalls();
+        initBall();
         loop();
     </script>
 </body>
