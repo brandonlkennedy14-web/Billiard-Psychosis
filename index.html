@@ -68,9 +68,9 @@
 <body>
 
     <div class="hud" id="ui-panel">
-        <span>DIM: <span id="ui-dim" class="hud-highlight">1 (SQUARE)</span></span>
-        <span>WINDING: <span id="ui-winding" class="hud-highlight">0</span></span>
-        <span>PRECISION: <span id="ui-precision" class="hud-highlight">0.0000</span></span>
+        <span>DIM: <span id="ui-dim" class="hud-highlight">1</span></span>
+        <span>BOUNCES: <span id="ui-winding" class="hud-highlight">0</span></span>
+        <span>BEST: <span id="ui-best" class="hud-highlight">0</span></span>
         <span id="ui-mic" class="hud-mic">[CLICK FOR AUDIO]</span>
     </div>
     
@@ -114,12 +114,14 @@
         let frameCount = 0;
         let baseMunkerHue = 0; // Drifts endlessly
 
-        const SHAPE_NAMES = { 3: 'TRIANGLE', 4: 'SQUARE', 5: 'PENTAGON', 6: 'HEXAGON', 8: 'OCTAGON' };
+        const SHAPE_NAMES = { 3: 'TRI', 4: 'SQR', 5: 'PENT', 6: 'HEX', 8: 'OCT' };
 
         let gameState = {
             dimension: 1,
-            winding: 0,
-            precision: "0.0000"
+            bounces: 0,
+            best: 0,
+            state: 'PLAYING', // 'PLAYING' or 'TRANSITION'
+            transitionTimer: 0
         };
 
         let shockwaves = [];
@@ -152,8 +154,9 @@
         // --- GEOMETRY GENERATOR ---
         function generateGeometry(sides) {
             const cx = WIDTH / 2;
-            const cy = HEIGHT / 2 + 20;
-            const R = Math.max(10, Math.min(WIDTH, HEIGHT) * 0.4); 
+            const cy = HEIGHT / 2 + 25; // Shifted slightly down for HUD
+            // Maximize size to fit screen better (0.46 covers ~92% of smallest screen dimension)
+            const R = Math.max(10, Math.min(WIDTH, HEIGHT) * 0.46); 
             
             let verts = [];
             // Start angle offsets to make shapes sit flat at the bottom
@@ -186,7 +189,21 @@
 
         window.addEventListener('resize', () => { resize(); initBall(); });
 
-        // --- DIMENSION LOGIC ---
+        // --- GAME LOGIC ---
+        function triggerTransition() {
+            gameState.state = 'TRANSITION';
+            gameState.transitionTimer = 120; // 2 seconds at 60fps
+            
+            // Check High Score
+            if (gameState.bounces > gameState.best) {
+                gameState.best = gameState.bounces;
+                document.getElementById('ui-best').innerText = gameState.best;
+            }
+            
+            // Randomly force high "audio" logic to make the background CA explode
+            currentAudioLevel = 80;
+        }
+
         function nextDimension() {
             gameState.dimension++;
             
@@ -226,7 +243,7 @@
         class Ball {
             constructor(x, y, vx, vy, radius) {
                 this.x = x; this.y = y; this.vx = vx; this.vy = vy; this.radius = radius;
-                this.lastCornerHit = 0;
+                this.lastBounce = 0;
                 this.angle = 0; 
                 this.trueColor = '#e0e0e0'; // Neutral bright sphere absorbs Munker-White stripes perfectly
             }
@@ -280,14 +297,13 @@
                 // 1. POCKET SINK LOGIC (Pre-check vertices)
                 for (let v of boardPoly.vertices) {
                     if (Math.hypot(this.x - v.x, this.y - v.y) < POCKET_RADIUS + this.radius * 0.5) {
-                        nextDimension();
+                        triggerTransition();
                         return; 
                     }
                 }
 
-                // 2. POLYGON EDGE COLLISION (Infinite Plane Approach)
+                // 2. POLYGON EDGE COLLISION
                 let hitWall = false;
-                let minDistToVertex = Infinity;
 
                 for(let i=0; i<boardPoly.sides; i++) {
                     let A = boardPoly.vertices[i];
@@ -320,24 +336,16 @@
                             hitWall = true;
                         }
                     }
-                    
-                    // Track nearest vertex for Precision math
-                    let dToV = Math.hypot(this.x - A.x, this.y - A.y);
-                    if (dToV < minDistToVertex) minDistToVertex = dToV;
                 }
 
-                // 3. NILS BERGLAND PRECISION LOGIC
-                const detectionRadius = 50; 
-                if (hitWall && minDistToVertex < detectionRadius && frameCount - this.lastCornerHit > 15) {
-                    gameState.winding++;
-                    const calcPrecision = 1 - (minDistToVertex / detectionRadius);
-                    gameState.precision = calcPrecision.toFixed(4);
-                    this.lastCornerHit = frameCount;
+                // 3. GAME LOGIC: INCREMENT BOUNCES
+                if (hitWall && frameCount - this.lastBounce > 5) {
+                    gameState.bounces++;
+                    this.lastBounce = frameCount;
+                    document.getElementById('ui-winding').innerText = gameState.bounces;
                     
-                    document.getElementById('ui-winding').innerText = gameState.winding;
-                    document.getElementById('ui-precision').innerText = gameState.precision;
                     document.getElementById('ui-panel').style.borderColor = '#0ff';
-                    setTimeout(() => document.getElementById('ui-panel').style.borderColor = '#333', 150);
+                    setTimeout(() => document.getElementById('ui-panel').style.borderColor = '#333', 100);
                 }
             }
 
@@ -388,10 +396,11 @@
                 }
             }
             
-            if (micEnabled && currentAudioLevel > 10) {
+            // Audio or Transition Phase causes CA disruption
+            if ((micEnabled && currentAudioLevel > 10) || gameState.state === 'TRANSITION') {
                 const step = Math.max(1, Math.floor((dataArray.length / 2) / CA_W));
                 for (let x = 0; x < CA_W; x++) {
-                    const audioVal = dataArray[x * step] || 0;
+                    const audioVal = dataArray[x * step] || (Math.random() * 100); // Fake data if no mic during transition
                     caData[x] = (audioVal > 70 + Math.random() * 50) ? 1 : 0;
                 }
             } else {
@@ -546,14 +555,15 @@
                 for(let i=0; i<dataArray.length; i++) sum += dataArray[i];
                 currentAudioLevel = sum / dataArray.length;
 
-                if (currentAudioLevel > 40 && frameCount % 8 === 0) {
+                // Only generate visual shockwaves if we are actively playing
+                if (gameState.state === 'PLAYING' && currentAudioLevel > 40 && frameCount % 8 === 0) {
                     shockwaves.push({ r: POCKET_RADIUS, force: currentAudioLevel, color: `rgb(${colVoice.join(',')})` });
                 }
             }
 
             if (frameCount % 4 === 0) updateBackgroundRuliad();
-            updateBoardCA();
-
+            
+            // === RENDER ROUTINE ===
             ctx.fillStyle = '#000';
             ctx.fillRect(0, 0, WIDTH, HEIGHT);
 
@@ -561,6 +571,34 @@
                 ctx.imageSmoothingEnabled = false;
                 ctx.drawImage(ruliadCanvas, 0, 0, WIDTH, HEIGHT);
             }
+
+            // === TRANSITION PHASE (THE VOID) ===
+            if (gameState.state === 'TRANSITION') {
+                gameState.transitionTimer--;
+                
+                // Draw text during transition
+                ctx.fillStyle = `hsl(${(frameCount * 5) % 360}, 100%, 50%)`;
+                ctx.font = '24px "Press Start 2P"';
+                ctx.textAlign = 'center';
+                ctx.fillText("VOID REACHED", WIDTH/2, HEIGHT/2 - 20);
+                
+                ctx.fillStyle = '#fff';
+                ctx.font = '12px "Press Start 2P"';
+                ctx.fillText(`BOUNCES: ${gameState.bounces}`, WIDTH/2, HEIGHT/2 + 20);
+
+                if (gameState.transitionTimer <= 0) {
+                    gameState.state = 'PLAYING';
+                    gameState.bounces = 0;
+                    document.getElementById('ui-winding').innerText = "0";
+                    nextDimension();
+                }
+                
+                requestAnimationFrame(loop);
+                return; // Skip rendering board/ball logic
+            }
+
+            // === PLAYING PHASE ===
+            updateBoardCA();
 
             // Draw Polygon Board
             drawBoard();
