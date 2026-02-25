@@ -393,10 +393,10 @@
                         let dy = p.y - this.y;
                         let dist = Math.hypot(dx, dy);
                         
-                        // Stronger Gravity well to pull the ball in from the sharp tips
-                        let pullRadius = POCKET_RADIUS * 4.0; 
+                        // Gentle Gravity well to coax the ball in, rather than instantly sucking it
+                        let pullRadius = POCKET_RADIUS * 2.5; 
                         if (dist < pullRadius && dist > 0) {
-                            let gravity = 8.0 * (1 - dist / pullRadius) * dt; 
+                            let gravity = 1.2 * (1 - dist / pullRadius) * dt; 
                             this.vx += (dx / dist) * gravity;
                             this.vy += (dy / dist) * gravity;
                         }
