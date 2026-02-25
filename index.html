@@ -36,7 +36,7 @@
             left: 50%;
             transform: translateX(-50%);
             width: 95%;
-            max-width: 900px;
+            max-width: 1000px;
             display: flex;
             justify-content: space-between;
             font-size: 10px;
@@ -46,9 +46,11 @@
             background: rgba(0, 0, 0, 0.6);
             padding: 10px;
             border: 2px solid #0ff;
+            flex-wrap: wrap;
+            gap: 5px;
         }
 
-        .hud span { flex: 1; text-align: center; }
+        .hud span { flex: 1; text-align: center; white-space: nowrap; }
         .hud-highlight { color: #f0f; }
         .hud-mic { color: #ff0; cursor: pointer; }
 
@@ -85,6 +87,7 @@
         <span>DIM: <span id="ui-dim" class="hud-highlight">1</span></span>
         <span>BOUNCES: <span id="ui-winding" class="hud-highlight">0</span></span>
         <span class="hidden md:inline">PRECISION: <span id="ui-precision" class="hud-highlight">0.0000</span></span>
+        <span class="hidden md:inline">HARMONIC: <span id="ui-harmonic" class="hud-highlight">0.0</span></span>
         <span>BEST: <span id="ui-best" class="hud-highlight">0</span></span>
         <span id="ui-mic" class="hud-mic">[CLICK FOR AUDIO]</span>
     </div>
@@ -122,6 +125,7 @@
             [[255,50,0], [0,255,200], [200,0,255], [255,255,0]]
         ];
         let currentPalette = palettes[0];
+        let bgPaletteShift = 0; // Cycles on wall bounce
         
         // Harmonic Munker-White Pairs
         const munkerPairs = [
@@ -156,6 +160,8 @@
         let audioCtx, analyser, dataArray;
         let micEnabled = false;
         let currentAudioLevel = 0;
+        let harmonicSpectrum = 0;
+        let sustainedHarmonic = 0; // For triggering resonance jumps
 
         async function initAudio() {
             if (micEnabled) return;
@@ -324,6 +330,7 @@
                 if (uiBest) uiBest.innerText = gameState.best;
             }
             currentAudioLevel = 90; 
+            sustainedHarmonic = 0; // Reset resonance overload
         }
 
         function nextDimension() {
@@ -342,7 +349,7 @@
 
             currentRule = (currentRule + 1) % 8; 
             
-            // Randomize the 1D background rule for truly unique voids (110, 90, 150, 30, 105 etc)
+            // Randomize the 1D background rule for truly unique voids
             const interestingRules = [30, 90, 110, 150, 105, 73, 22, 126, 45, 169];
             bgRule = interestingRules[Math.floor(Math.random() * interestingRules.length)];
 
@@ -389,7 +396,8 @@
                 const dt = 1 / subSteps;
                 let hitWallThisFrame = false;
                 let minSubDistToPocket = Infinity;
-                let disableWallCollisionThisFrame = false; // The Black Hole Fix
+                let disableWallCollisionThisFrame = false;
+                let frameBounced = false; // Used to trigger visual effects
 
                 for (let step = 0; step < subSteps; step++) {
                     
@@ -406,13 +414,10 @@
                             this.vy += (dy / dist) * gravity;
                         }
 
-                        // EVENT HORIZON: If we are close enough to risk getting wedged, 
-                        // we disable the walls and let the pocket devour the ball.
                         if (dist < POCKET_RADIUS * 1.6) {
                             disableWallCollisionThisFrame = true;
                         }
 
-                        // THE SINK
                         if (dist < POCKET_RADIUS * 1.2) {
                             triggerTransition(p); 
                             return; 
@@ -481,6 +486,7 @@
                                     this.vx -= 2 * dot * nx;
                                     this.vy -= 2 * dot * ny;
                                     hitWallThisFrame = true;
+                                    frameBounced = true;
                                 }
                             }
                         }
@@ -488,7 +494,7 @@
                         this.x += overlapOffset.x;
                         this.y += overlapOffset.y;
 
-                        // Emergency Pull-back (Only if we aren't sinking)
+                        // Emergency Pull-back
                         let dCenter = Math.hypot(this.x - boardShape.cx, this.y - boardShape.cy);
                         if (dCenter > boardShape.r + this.radius) {
                             let pX = boardShape.cx - this.x, pY = boardShape.cy - this.y;
@@ -504,6 +510,11 @@
                             if (dToP < minSubDistToPocket) minSubDistToPocket = dToP;
                         }
                     }
+                }
+
+                // Bounce triggers Background Palette Shift
+                if (frameBounced) {
+                    bgPaletteShift = (bgPaletteShift + 1) % 4;
                 }
 
                 // PRECISION MATH
@@ -560,7 +571,7 @@
                 }
             }
             
-            let activeRule = bgRule; // Uses unique dimension rule
+            let activeRule = bgRule; 
             
             if (playerBall && gameState.state === 'PLAYING') {
                 let ballCaX = Math.floor((playerBall.x / WIDTH) * CA_W);
@@ -571,8 +582,11 @@
                 }
             }
 
+            // Audio actively mutates the rule via Harmonic Spectrum
             if (micEnabled && currentAudioLevel > 15) {
-                activeRule = Math.floor(currentAudioLevel) ^ (frameCount % 255);
+                // Dominant harmonic spectrum controls the mathematical background rules
+                activeRule = Math.floor(harmonicSpectrum * 2.55) ^ (frameCount % 255);
+                
                 const step = Math.max(1, Math.floor((dataArray.length / 2) / CA_W));
                 for (let x = 0; x < CA_W; x++) {
                     if (dataArray[x * step] > 80) caData[x] = 1;
@@ -590,8 +604,10 @@
             }
 
             const imgData = rCtx.createImageData(CA_W, CA_H);
-            const bgCol = currentPalette[0];
-            const fgCol = currentPalette[2]; 
+            
+            // Background color is pulled from the dimensional palette and shifted by WALL BOUNCES
+            const bgCol = currentPalette[(0 + bgPaletteShift) % 4];
+            const fgCol = currentPalette[(2 + bgPaletteShift) % 4]; 
 
             for (let y = 0; y < CA_H; y++) {
                 for (let x = 0; x < CA_W; x++) {
@@ -637,9 +653,9 @@
             }
 
             const imgData = bCtx.createImageData(B_CA_SIZE, B_CA_SIZE);
-            const t = Math.floor(frameCount / 3); // Faster time variable
+            const t = Math.floor(frameCount / 3); 
             const audioShift = Math.floor(currentAudioLevel / 15);
-            const dimMod = (gameState.dimension % 5) + 1; // Creates unique math scales per dimension
+            const dimMod = (gameState.dimension % 5) + 1; 
 
             for (let y = 0; y < B_CA_SIZE; y++) {
                 for (let x = 0; x < B_CA_SIZE; x++) {
@@ -656,9 +672,9 @@
                     let avg = nSum / nCount;
 
                     let vMath = 0;
-                    const ruleMod = currentRule % 8;
+                    // Inject the harmonic spectrum ratio directly into the rule modification map
+                    const ruleMod = (currentRule + Math.floor(harmonicSpectrum / 10)) % 8;
                     
-                    // The dimension directly modifies the mathematical structure!
                     if (ruleMod === 0) vMath = (cx * dimMod) ^ (cy * dimMod);                           
                     else if (ruleMod === 1) vMath = (cx & cy) * dimMod;                      
                     else if (ruleMod === 2) vMath = (cx | cy) * dimMod;                      
@@ -671,7 +687,6 @@
                     let val = Math.abs(vMath - t*2 + avg * 0.9 + trailData[i]*1.5);
                     bDataNext[i] = val % 256;
                     
-                    // Time-based Color Cycling! Shifts colors so the static patterns appear to move.
                     let colorShift = Math.floor(frameCount / 15);
                     let colorIndex = (Math.floor(bDataNext[i] / 64) + colorShift) % 4; 
                     
@@ -742,11 +757,36 @@
         function loop() {
             frameCount++;
 
+            // --- AUDIO & HARMONIC SPECTRUM ANALYSIS ---
             if (micEnabled) {
                 analyser.getByteFrequencyData(dataArray);
                 let sum = 0;
-                for(let i=0; i<dataArray.length; i++) sum += dataArray[i];
+                let maxAmp = 0;
+                let domBin = 0;
+                
+                for(let i=0; i<dataArray.length; i++) {
+                    sum += dataArray[i];
+                    if (dataArray[i] > maxAmp) {
+                        maxAmp = dataArray[i];
+                        domBin = i;
+                    }
+                }
+                
                 currentAudioLevel = sum / dataArray.length;
+                harmonicSpectrum = maxAmp > 15 ? (domBin / dataArray.length) * 100 : 0;
+                
+                const uiHarmonic = document.getElementById('ui-harmonic');
+                if (uiHarmonic) uiHarmonic.innerText = harmonicSpectrum.toFixed(1);
+
+                // Dimension Overload: Highly sustained pure harmonic tone forces a dimensional shift!
+                if (maxAmp > 240 && harmonicSpectrum > 0) {
+                    sustainedHarmonic++;
+                    if (sustainedHarmonic > 150 && gameState.state === 'PLAYING') {
+                        triggerTransition(playerBall ? {x: playerBall.x, y: playerBall.y} : {x: boardShape.cx, y: boardShape.cy});
+                    }
+                } else {
+                    sustainedHarmonic = Math.max(0, sustainedHarmonic - 2);
+                }
             }
 
             if (frameCount % 4 === 0) updateBackgroundRuliad();
@@ -795,8 +835,8 @@
                     ctx.save();
                     ctx.translate(cx, cy);
                     ctx.scale(ballScale, ballScale);
-                    ctx.fillStyle = playerBall.trueColor;
-                    ctx.beginPath(); ctx.arc(0, 0, playerBall.radius, 0, Math.PI * 2); ctx.fill();
+                    ctx.fillStyle = playerBall ? playerBall.trueColor : '#fff';
+                    ctx.beginPath(); ctx.arc(0, 0, POCKET_RADIUS * 0.6, 0, Math.PI * 2); ctx.fill();
                     ctx.restore();
                 }
                 
