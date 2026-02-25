@@ -352,7 +352,7 @@
         }
 
         // --- PHYSICS & BALL ---
-        const POCKET_RADIUS = 36; // Increased to cover sharp corners visually
+        const POCKET_RADIUS = 24; // Reduced from 36 to make holes smaller and fairer
 
         class Ball {
             constructor(x, y, vx, vy, radius) {
@@ -374,9 +374,9 @@
                 }
 
                 const speed = Math.hypot(this.vx, this.vy);
-                if (speed > 12) {
-                    this.vx = (this.vx / speed) * 12;
-                    this.vy = (this.vy / speed) * 12;
+                if (speed > 10) { // Reduced max speed from 12 to 10 for better control
+                    this.vx = (this.vx / speed) * 10;
+                    this.vy = (this.vy / speed) * 10;
                 }
 
                 // Continuous Collision Detection Sub-stepping
@@ -393,16 +393,16 @@
                         let dy = p.y - this.y;
                         let dist = Math.hypot(dx, dy);
                         
-                        // Gentle Gravity well to coax the ball in, rather than instantly sucking it
-                        let pullRadius = POCKET_RADIUS * 2.5; 
+                        // Much tighter and weaker gravity well
+                        let pullRadius = POCKET_RADIUS * 1.8; 
                         if (dist < pullRadius && dist > 0) {
-                            let gravity = 1.2 * (1 - dist / pullRadius) * dt; 
+                            let gravity = 0.5 * (1 - dist / pullRadius) * dt; // Weakened from 1.2 to 0.5
                             this.vx += (dx / dist) * gravity;
                             this.vy += (dy / dist) * gravity;
                         }
 
-                        // Forgiving Sink Detection: Triggers before getting wedged
-                        if (dist < POCKET_RADIUS + this.radius * 1.5) {
+                        // Strict Sink Detection: Ball must be mostly inside the hole now
+                        if (dist < POCKET_RADIUS * 0.8) {
                             triggerTransition(p); 
                             return; 
                         }
