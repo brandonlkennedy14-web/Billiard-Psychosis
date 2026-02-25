@@ -110,6 +110,9 @@
         boardCanvas.width = B_CA_SIZE;
         boardCanvas.height = B_CA_SIZE;
         
+        // Double buffer for feedback math
+        let bData = new Uint8Array(B_CA_SIZE * B_CA_SIZE); 
+        let bDataNext = new Uint8Array(B_CA_SIZE * B_CA_SIZE); 
         let trailData = new Uint8Array(B_CA_SIZE * B_CA_SIZE); 
         
         const palettes = [
@@ -145,7 +148,7 @@
             best: 0,
             state: 'PLAYING', 
             transitionTimer: 0,
-            sinkHole: {x: 0, y: 0} // Tracks where the ball fell for tunnel rendering
+            sinkHole: {x: 0, y: 0} 
         };
 
         // --- AUDIO ENGINE ---
@@ -190,7 +193,7 @@
             
             const types = ['POLYGON', 'STAR', 'HYPERBOLIC_SQUARE', 'HYPOTROCHOID'];
             const type = types[gameState.dimension % types.length];
-            const primeMod = (gameState.dimension * 7) % 5; // Adds chaos to generation sequences
+            const primeMod = (gameState.dimension * 7) % 5; 
             
             if (type === 'HYPERBOLIC_SQUARE') {
                 const resolution = 200;
@@ -213,7 +216,7 @@
                 }
             }
             else if (type === 'POLYGON') {
-                let sides = primeMod + 4; // 4 to 8
+                let sides = primeMod + 4; 
                 let startAngle = -Math.PI / 2; 
                 for(let i=0; i<sides; i++) {
                     let angle = startAngle + (i * 2 * Math.PI / sides);
@@ -224,7 +227,7 @@
                 }
             } 
             else if (type === 'STAR') {
-                let sides = (primeMod % 3) + 4; // 4 to 6 point star
+                let sides = (primeMod % 3) + 4; 
                 let startAngle = -Math.PI / 2; 
                 for(let i=0; i<sides * 2; i++) {
                     let r = i % 2 === 0 ? R : R * 0.55; 
@@ -236,8 +239,7 @@
                 }
             }
             else if (type === 'HYPOTROCHOID') {
-                // Generates complex floral/spirograph hyperbolic boundaries
-                const numLobes = primeMod + 3; // 3 to 7 lobes
+                const numLobes = primeMod + 3; 
                 const resolution = 200;
                 const hr = R * 0.6;
                 const pr = hr * (numLobes - 1) / numLobes;
@@ -254,7 +256,6 @@
                     if (dist > maxDist) maxDist = dist;
                 }
                 
-                // Assign pockets to the outermost lobe tips
                 for(let i=0; i<verts.length; i++) {
                     let p = verts[i];
                     if (Math.hypot(p.x - cx, p.y - cy) > maxDist * 0.95) {
@@ -313,7 +314,7 @@
         // --- GAME LOGIC ---
         function triggerTransition(holePoint) {
             gameState.state = 'TRANSITION';
-            gameState.transitionTimer = 150; // Slower transition for tunnel animation
+            gameState.transitionTimer = 150; 
             gameState.sinkHole = holePoint;
             
             if (gameState.bounces > gameState.best) {
@@ -344,13 +345,14 @@
 
             caData.fill(0);
             trailData.fill(0);
+            bData.fill(0);
             if (caData.length > 0) caData[Math.floor(CA_W / 2)] = 1;
 
             initBall();
         }
 
         // --- PHYSICS & BALL ---
-        const POCKET_RADIUS = 30; // Slightly expanded for better quality-of-life sinking
+        const POCKET_RADIUS = 30; 
 
         class Ball {
             constructor(x, y, vx, vy, radius) {
@@ -377,14 +379,34 @@
                     this.vy = (this.vy / speed) * 12;
                 }
 
-                // Sub-stepping Continuous Collision Detection (CCD)
-                // Prevents tunneling through pockets or edges at high speeds
+                // Continuous Collision Detection Sub-stepping
                 const subSteps = 2; 
                 const dt = 1 / subSteps;
                 let hitWallThisFrame = false;
                 let minSubDistToPocket = Infinity;
 
                 for (let step = 0; step < subSteps; step++) {
+                    
+                    // POCKET SINK & GRAVITY LOGIC
+                    for (let p of boardShape.pockets) {
+                        let dx = p.x - this.x;
+                        let dy = p.y - this.y;
+                        let dist = Math.hypot(dx, dy);
+                        
+                        // Subtle Gravity well to pull the ball in
+                        let pullRadius = POCKET_RADIUS * 3.5; 
+                        if (dist < pullRadius && dist > 0) {
+                            let gravity = 4.0 * (1 - dist / pullRadius) * dt; 
+                            this.vx += (dx / dist) * gravity;
+                            this.vy += (dy / dist) * gravity;
+                        }
+
+                        if (dist < POCKET_RADIUS) {
+                            triggerTransition(p); 
+                            return; 
+                        }
+                    }
+
                     this.x += this.vx * dt; 
                     this.y += this.vy * dt;
                     this.angle += speed * 0.05 * dt;
@@ -408,14 +430,6 @@
                                     trailData[ny * B_CA_SIZE + nx] = injectionHeat;
                                 }
                             }
-                        }
-                    }
-
-                    // POCKET SINK LOGIC (Evaluated securely within CCD)
-                    for (let p of boardShape.pockets) {
-                        if (Math.hypot(this.x - p.x, this.y - p.y) < POCKET_RADIUS) {
-                            triggerTransition(p); // Pass the pocket coord for the tunnel
-                            return; 
                         }
                     }
 
@@ -562,20 +576,24 @@
             }
 
             const imgData = rCtx.createImageData(CA_W, CA_H);
-            const basePhase = frameCount * 0.05;
+            const bgCol = currentPalette[0];
+            const fgCol = currentPalette[2]; 
 
+            // Unified dimension background rendering (no baseline flashing)
             for (let y = 0; y < CA_H; y++) {
-                const r = Math.sin((basePhase + y * 0.1)) * 127 + 128;
-                const g = Math.sin((basePhase + y * 0.1 + 2)) * 127 + 128;
-                const b = Math.sin((basePhase + y * 0.1 + 4)) * 127 + 128;
-
                 for (let x = 0; x < CA_W; x++) {
                     const i = y * CA_W + x;
                     const idx = i * 4;
                     if (caData[i] > 0) {
-                        imgData.data[idx] = r; imgData.data[idx+1] = g; imgData.data[idx+2] = b; imgData.data[idx+3] = 255;
+                        imgData.data[idx] = fgCol[0]; 
+                        imgData.data[idx+1] = fgCol[1]; 
+                        imgData.data[idx+2] = fgCol[2]; 
+                        imgData.data[idx+3] = 255;
                     } else {
-                        imgData.data[idx] = 10; imgData.data[idx+1] = 0; imgData.data[idx+2] = 20; imgData.data[idx+3] = 255;
+                        imgData.data[idx] = Math.floor(bgCol[0] * 0.15); 
+                        imgData.data[idx+1] = Math.floor(bgCol[1] * 0.15); 
+                        imgData.data[idx+2] = Math.floor(bgCol[2] * 0.15); 
+                        imgData.data[idx+3] = 255;
                     }                   
                 }
             }
@@ -583,10 +601,12 @@
         }
 
         function updateBoardRuliad() {
+            // Fade Trail Data
             for(let i = 0; i < trailData.length; i++) {
                 if(trailData[i] > 0) trailData[i] = Math.max(0, trailData[i] - 2);
             }
 
+            // Cymatic Audio Ring Generator
             if (micEnabled && currentAudioLevel > 20) {
                 for (let y = 0; y < B_CA_SIZE; y++) {
                     for (let x = 0; x < B_CA_SIZE; x++) {
@@ -606,43 +626,64 @@
             }
 
             const imgData = bCtx.createImageData(B_CA_SIZE, B_CA_SIZE);
-            const t = Math.floor(frameCount / 4) + Math.floor(currentAudioLevel / 10);
+            const t = Math.floor(frameCount / 4);
+            const audioShift = Math.floor(currentAudioLevel / 15);
 
             for (let y = 0; y < B_CA_SIZE; y++) {
                 for (let x = 0; x < B_CA_SIZE; x++) {
-                    const cx = x - B_CA_SIZE/2;
-                    const cy = y - B_CA_SIZE/2;
+                    let i = y * B_CA_SIZE + x;
                     
-                    let val = 0;
+                    // Audio shifts coordinate space to warp rules
+                    let cx = x - B_CA_SIZE/2 + audioShift;
+                    let cy = y - B_CA_SIZE/2 - audioShift;
+                    
+                    // Neighborhood Average (Organic CA Feedback Loop)
+                    let nSum = 0, nCount = 0;
+                    if (x > 0) { nSum += bData[i - 1]; nCount++; }
+                    if (x < B_CA_SIZE - 1) { nSum += bData[i + 1]; nCount++; }
+                    if (y > 0) { nSum += bData[i - B_CA_SIZE]; nCount++; }
+                    if (y < B_CA_SIZE - 1) { nSum += bData[i + B_CA_SIZE]; nCount++; }
+                    let avg = nSum / nCount;
+
+                    let vMath = 0;
                     const ruleMod = currentRule % 8;
-                    if (ruleMod === 0) val = (cx ^ cy) - t;                           
-                    else if (ruleMod === 1) val = (cx & cy) * t;                      
-                    else if (ruleMod === 2) val = (cx | cy) ^ t;                      
-                    else if (ruleMod === 3) val = Math.floor(Math.sqrt(cx*cx + cy*cy)) * ((t%5) + 1); 
-                    else if (ruleMod === 4) val = (cx * cx ^ cy * cy) % Math.max(1, t); 
-                    else if (ruleMod === 5) val = (cx * t) ^ (cy * t);                
-                    else if (ruleMod === 6) val = ((cx+t) ^ (cy-t)) % (Math.floor(currentAudioLevel/10)+2); 
-                    else if (ruleMod === 7) val = Math.abs(Math.sin(cx/10)*Math.cos(cy/10)) * 255; 
                     
-                    val = Math.abs(val + trailData[y * B_CA_SIZE + x]);
+                    if (ruleMod === 0) vMath = (cx ^ cy);                           
+                    else if (ruleMod === 1) vMath = (cx & cy);                      
+                    else if (ruleMod === 2) vMath = (cx | cy);                      
+                    else if (ruleMod === 3) vMath = Math.floor(Math.sqrt(cx*cx + cy*cy)); 
+                    else if (ruleMod === 4) vMath = (cx * cx ^ cy * cy); 
+                    else if (ruleMod === 5) vMath = (cx * cy) ^ cx;                
+                    else if (ruleMod === 6) vMath = (cx+cy) ^ (cx-cy); 
+                    else if (ruleMod === 7) vMath = Math.abs(cx * 2 ^ cy * 2); 
                     
-                    const colorIndex = val % 4;
+                    // Generative math applies to ITSELF! (Feedback combination)
+                    let val = Math.abs(vMath - t*2 + avg * 0.9 + trailData[i]*1.5);
+                    bDataNext[i] = val % 256;
+                    
+                    // Assign to the 4 dimensional palette colors
+                    let colorIndex = Math.floor(bDataNext[i] / 64) % 4; 
                     const c = currentPalette[colorIndex];
                     
                     let r = c[0], g = c[1], b = c[2];
-                    if (trailData[y * B_CA_SIZE + x] > 200) {
+                    
+                    // High-contrast Voice / Trail Overrides
+                    if (trailData[i] > 200) {
                         r = 255; g = 255; b = 0; 
-                    } else if (trailData[y * B_CA_SIZE + x] > 50) {
+                    } else if (trailData[i] > 50) {
                         r = 255; g = 0; b = 150; 
                     }
 
-                    const idx = (y * B_CA_SIZE + x) * 4;
+                    const idx = i * 4;
                     imgData.data[idx] = r;
                     imgData.data[idx+1] = g;
                     imgData.data[idx+2] = b;
                     imgData.data[idx+3] = 255;
                 }
             }
+            // Swap double buffer
+            for (let i = 0; i < B_CA_SIZE * B_CA_SIZE; i++) bData[i] = bDataNext[i];
+            
             bCtx.putImageData(imgData, 0, 0);
         }
 
@@ -712,16 +753,14 @@
             // === THE VOID TUNNEL TRANSITION ===
             if (gameState.state === 'TRANSITION') {
                 gameState.transitionTimer--;
-                let prog = 1 - (gameState.transitionTimer / 150); // 0.0 to 1.0
+                let prog = 1 - (gameState.transitionTimer / 150); 
                 
-                // Darken background
                 ctx.fillStyle = `rgba(0,0,0,${Math.min(1, prog * 1.5)})`;
                 ctx.fillRect(0, 0, WIDTH, HEIGHT);
 
                 let cx = gameState.sinkHole.x;
                 let cy = gameState.sinkHole.y;
                 
-                // Draw 3D Tunnel Rings
                 for (let i = 0; i < 15; i++) {
                     let ringT = (i / 15 + prog * 4) % 1; 
                     let scale = Math.pow(ringT, 4) * 6; 
@@ -734,15 +773,15 @@
                     ctx.translate(-cx, -cy);
                     
                     ctx.globalAlpha = Math.max(0, alpha);
-                    // Draw repeating Ruliad borders to form the tunnel
-                    ctx.strokeStyle = `hsl(${(prog * 360 + i * 24) % 360}, 100%, 50%)`;
+                    // Match tunnel color to dimensional palette
+                    let cIndex = i % 4;
+                    ctx.strokeStyle = `rgb(${currentPalette[cIndex][0]}, ${currentPalette[cIndex][1]}, ${currentPalette[cIndex][2]})`;
                     ctx.lineWidth = 4 / scale; 
                     drawShapePath(ctx, boardShape, false);
                     ctx.stroke();
                     ctx.restore();
                 }
 
-                // Ball falling into the abyss
                 if (prog < 0.6) {
                     let ballScale = 1 - (prog / 0.6);
                     ctx.save();
