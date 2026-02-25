@@ -115,11 +115,12 @@
         const palettes = [
             [[0,255,255], [255,0,255], [255,255,0], [0,0,255]], 
             [[0,255,0], [128,0,128], [0,128,255], [255,165,0]], 
-            [[255,0,100], [0,255,100], [100,0,255], [255,255,255]] 
+            [[255,0,100], [0,255,100], [100,0,255], [255,255,255]],
+            [[255,50,0], [0,255,200], [200,0,255], [255,255,0]]
         ];
         let currentPalette = palettes[0];
         
-        // Requested Harmonic Munker-White Pairs
+        // Harmonic Munker-White Pairs
         const munkerPairs = [
             ['#00FFFF', '#FF00FF'], // Cyan / Magenta
             ['#800080', '#00FF00'], // Purple / Green
@@ -132,7 +133,7 @@
         let HEIGHT = window.innerHeight || 600;
         
         // Dynamic Geometry State
-        let boardShape = { type: 'HYPERBOLIC_SQUARE', cx: 0, cy: 0, r: 0, vertices: [], pockets: [] };
+        let boardShape = { type: 'POLYGON', cx: 0, cy: 0, r: 0, vertices: [], pockets: [] };
         let boardRect = { x: 0, y: 0, size: 0 };
         
         let currentRule = 0; 
@@ -143,7 +144,8 @@
             bounces: 0,
             best: 0,
             state: 'PLAYING', 
-            transitionTimer: 0
+            transitionTimer: 0,
+            sinkHole: {x: 0, y: 0} // Tracks where the ball fell for tunnel rendering
         };
 
         // --- AUDIO ENGINE ---
@@ -186,11 +188,11 @@
             let verts = [];
             let pockets = [];
             
-            const types = ['HYPERBOLIC_SQUARE', 'POLYGON', 'STAR'];
+            const types = ['POLYGON', 'STAR', 'HYPERBOLIC_SQUARE', 'HYPOTROCHOID'];
             const type = types[gameState.dimension % types.length];
+            const primeMod = (gameState.dimension * 7) % 5; // Adds chaos to generation sequences
             
             if (type === 'HYPERBOLIC_SQUARE') {
-                // Matches Screenshot 2: Square intersecting with 4 lobes
                 const resolution = 200;
                 const sqBaseR = R * 0.65;
                 for(let i=0; i<resolution; i++) {
@@ -211,7 +213,7 @@
                 }
             }
             else if (type === 'POLYGON') {
-                let sides = (gameState.dimension % 4) + 4; // 4 to 7
+                let sides = primeMod + 4; // 4 to 8
                 let startAngle = -Math.PI / 2; 
                 for(let i=0; i<sides; i++) {
                     let angle = startAngle + (i * 2 * Math.PI / sides);
@@ -222,11 +224,10 @@
                 }
             } 
             else if (type === 'STAR') {
-                let sides = (gameState.dimension % 3) + 4; 
+                let sides = (primeMod % 3) + 4; // 4 to 6 point star
                 let startAngle = -Math.PI / 2; 
                 for(let i=0; i<sides * 2; i++) {
-                    // Widened the inner radius from 0.5 to 0.65 so the ball can fit into the pocket!
-                    let r = i % 2 === 0 ? R : R * 0.65; 
+                    let r = i % 2 === 0 ? R : R * 0.55; 
                     let angle = startAngle + (i * Math.PI) / sides;
                     let px = cx + r * Math.cos(angle);
                     let py = cy + r * Math.sin(angle);
@@ -234,12 +235,40 @@
                     if (i % 2 === 0) pockets.push({ x: px, y: py });
                 }
             }
+            else if (type === 'HYPOTROCHOID') {
+                // Generates complex floral/spirograph hyperbolic boundaries
+                const numLobes = primeMod + 3; // 3 to 7 lobes
+                const resolution = 200;
+                const hr = R * 0.6;
+                const pr = hr * (numLobes - 1) / numLobes;
+                const d = R * 0.45;
+                let maxDist = 0;
+                
+                for(let i=0; i<resolution; i++) {
+                    let theta = (i / resolution) * Math.PI * 2 * numLobes;
+                    let x = (hr - pr) * Math.cos(theta) + d * Math.cos(((hr - pr) / pr) * theta);
+                    let y = (hr - pr) * Math.sin(theta) - d * Math.sin(((hr - pr) / pr) * theta);
+                    verts.push({ x: cx + x, y: cy + y });
+                    
+                    let dist = Math.hypot(x, y);
+                    if (dist > maxDist) maxDist = dist;
+                }
+                
+                // Assign pockets to the outermost lobe tips
+                for(let i=0; i<verts.length; i++) {
+                    let p = verts[i];
+                    if (Math.hypot(p.x - cx, p.y - cy) > maxDist * 0.95) {
+                        if (!pockets.some(pk => Math.hypot(pk.x - p.x, pk.y - p.y) < R * 0.2)) {
+                            pockets.push({x: p.x, y: p.y});
+                        }
+                    }
+                }
+            }
             
             boardShape = { type, cx, cy, r: R, vertices: verts, pockets: pockets };
             boardRect = { x: cx - R, y: cy - R, size: R * 2 };
         }
 
-        // Apply audio distortion to the stroke of the geometry to create glitch/wave artifacts
         function drawShapePath(ctx, shape, applyAudioDistortion = false) {
             ctx.beginPath();
             if (shape.vertices.length === 0) return;
@@ -249,13 +278,9 @@
                 let px = v.x;
                 let py = v.y;
                 
-                // Voice inputs actively manipulate visual geometry
                 if (applyAudioDistortion && micEnabled && currentAudioLevel > 15) {
-                    // Map the vertex index to a frequency bin in the audio data
                     let bin = Math.floor((i / shape.vertices.length) * (dataArray.length / 2));
-                    let force = (dataArray[bin] / 255) * (currentAudioLevel * 0.4);
-                    
-                    // Push the vertex outward along its normal/angle from center
+                    let force = (dataArray[bin] / 255) * (currentAudioLevel * 0.5);
                     let angle = Math.atan2(v.y - shape.cy, v.x - shape.cx);
                     px += Math.cos(angle) * force;
                     py += Math.sin(angle) * force;
@@ -286,9 +311,10 @@
         window.addEventListener('resize', () => { resize(); initBall(); });
 
         // --- GAME LOGIC ---
-        function triggerTransition() {
+        function triggerTransition(holePoint) {
             gameState.state = 'TRANSITION';
-            gameState.transitionTimer = 100; 
+            gameState.transitionTimer = 150; // Slower transition for tunnel animation
+            gameState.sinkHole = holePoint;
             
             if (gameState.bounces > gameState.best) {
                 gameState.best = gameState.bounces;
@@ -312,7 +338,7 @@
             const uiDim = document.getElementById('ui-dim');
             if (uiDim) uiDim.innerText = `${gameState.dimension} (${boardShape.type})`;
 
-            currentRule = (currentRule + 1) % 8; // Cycle through 8 unique Ruliad math rules
+            currentRule = (currentRule + 1) % 8; 
             currentPalette = palettes[gameState.dimension % palettes.length];
             currentMunkerPair = munkerPairs[gameState.dimension % munkerPairs.length];
 
@@ -324,7 +350,7 @@
         }
 
         // --- PHYSICS & BALL ---
-        const POCKET_RADIUS = 26;
+        const POCKET_RADIUS = 30; // Slightly expanded for better quality-of-life sinking
 
         class Ball {
             constructor(x, y, vx, vy, radius) {
@@ -340,7 +366,6 @@
                     const dx = this.x - boardShape.cx;
                     const dy = this.y - boardShape.cy;
                     const dist = Math.hypot(dx, dy) || 1;
-                    
                     const force = (currentAudioLevel * 0.008) / (dist * 0.01);
                     this.vx += (dx / dist) * force;
                     this.vy += (dy / dist) * force;
@@ -352,107 +377,113 @@
                     this.vy = (this.vy / speed) * 12;
                 }
 
-                this.x += this.vx; 
-                this.y += this.vy;
-                this.angle += speed * 0.1;
+                // Sub-stepping Continuous Collision Detection (CCD)
+                // Prevents tunneling through pockets or edges at high speeds
+                const subSteps = 2; 
+                const dt = 1 / subSteps;
+                let hitWallThisFrame = false;
+                let minSubDistToPocket = Infinity;
 
-                // Write to Board CA
-                const caX = Math.floor(((this.x - boardRect.x) / boardRect.size) * B_CA_SIZE);
-                const caY = Math.floor(((this.y - boardRect.y) / boardRect.size) * B_CA_SIZE);
-                
-                let brushRadius = 1;
-                let injectionHeat = 120; 
-                if (micEnabled && currentAudioLevel > 15) {
-                    brushRadius = Math.max(2, Math.floor(currentAudioLevel / 15));
-                    injectionHeat = 255; 
-                }
-                
-                for(let dy = -brushRadius; dy <= brushRadius; dy++) {
-                    for(let dx = -brushRadius; dx <= brushRadius; dx++) {
-                        if(dx*dx + dy*dy <= brushRadius*brushRadius) {
-                            const nx = caX + dx, ny = caY + dy;
-                            if(nx >= 0 && nx < B_CA_SIZE && ny >= 0 && ny < B_CA_SIZE) {
-                                trailData[ny * B_CA_SIZE + nx] = injectionHeat;
+                for (let step = 0; step < subSteps; step++) {
+                    this.x += this.vx * dt; 
+                    this.y += this.vy * dt;
+                    this.angle += speed * 0.05 * dt;
+
+                    // Write to Board CA
+                    const caX = Math.floor(((this.x - boardRect.x) / boardRect.size) * B_CA_SIZE);
+                    const caY = Math.floor(((this.y - boardRect.y) / boardRect.size) * B_CA_SIZE);
+                    
+                    let brushRadius = 1;
+                    let injectionHeat = 120; 
+                    if (micEnabled && currentAudioLevel > 15) {
+                        brushRadius = Math.max(2, Math.floor(currentAudioLevel / 12));
+                        injectionHeat = 255; 
+                    }
+                    
+                    for(let dy = -brushRadius; dy <= brushRadius; dy++) {
+                        for(let dx = -brushRadius; dx <= brushRadius; dx++) {
+                            if(dx*dx + dy*dy <= brushRadius*brushRadius) {
+                                const nx = caX + dx, ny = caY + dy;
+                                if(nx >= 0 && nx < B_CA_SIZE && ny >= 0 && ny < B_CA_SIZE) {
+                                    trailData[ny * B_CA_SIZE + nx] = injectionHeat;
+                                }
                             }
                         }
                     }
-                }
 
-                // POCKET SINK LOGIC
-                for (let p of boardShape.pockets) {
-                    if (Math.hypot(this.x - p.x, this.y - p.y) < POCKET_RADIUS) {
-                        triggerTransition();
-                        return; 
+                    // POCKET SINK LOGIC (Evaluated securely within CCD)
+                    for (let p of boardShape.pockets) {
+                        if (Math.hypot(this.x - p.x, this.y - p.y) < POCKET_RADIUS) {
+                            triggerTransition(p); // Pass the pocket coord for the tunnel
+                            return; 
+                        }
                     }
-                }
 
-                // STRICT BULLETPROOF COLLISION (Circle vs Line Segments)
-                let hitWall = false;
-                let overlapOffset = {x: 0, y: 0};
-                let minDistToPocket = Infinity;
-
-                for(let i=0; i<boardShape.vertices.length; i++) {
-                    let A = boardShape.vertices[i];
-                    let B = boardShape.vertices[(i+1)%boardShape.vertices.length];
+                    // STRICT BULLETPROOF COLLISION
+                    let overlapOffset = {x: 0, y: 0};
                     
-                    let dx = B.x - A.x;
-                    let dy = B.y - A.y;
-                    let len2 = dx*dx + dy*dy;
-                    if(len2 === 0) continue;
+                    for(let i=0; i<boardShape.vertices.length; i++) {
+                        let A = boardShape.vertices[i];
+                        let B = boardShape.vertices[(i+1)%boardShape.vertices.length];
+                        
+                        let dx = B.x - A.x;
+                        let dy = B.y - A.y;
+                        let len2 = dx*dx + dy*dy;
+                        if(len2 === 0) continue;
 
-                    // Project ball onto segment
-                    let t = ((this.x - A.x) * dx + (this.y - A.y) * dy) / len2;
-                    t = Math.max(0, Math.min(1, t)); 
+                        let tLine = ((this.x - A.x) * dx + (this.y - A.y) * dy) / len2;
+                        tLine = Math.max(0, Math.min(1, tLine)); 
 
-                    let closestX = A.x + t * dx;
-                    let closestY = A.y + t * dy;
+                        let closestX = A.x + tLine * dx;
+                        let closestY = A.y + tLine * dy;
 
-                    // Distance to segment
-                    let distX = this.x - closestX;
-                    let distY = this.y - closestY;
-                    let dist = Math.hypot(distX, distY);
+                        let distX = this.x - closestX;
+                        let distY = this.y - closestY;
+                        let dist = Math.hypot(distX, distY);
 
-                    if (dist < this.radius && dist > 0) {
-                        let nx = distX / dist;
-                        let ny = distY / dist;
+                        if (dist < this.radius && dist > 0.01) {
+                            let nx = distX / dist;
+                            let ny = distY / dist;
 
-                        // Push out
-                        let overlap = this.radius - dist;
-                        overlapOffset.x += nx * overlap;
-                        overlapOffset.y += ny * overlap;
+                            let overlap = this.radius - dist;
+                            overlapOffset.x += nx * overlap;
+                            overlapOffset.y += ny * overlap;
 
-                        // Reflect velocity
-                        let dot = this.vx * nx + this.vy * ny;
-                        if (dot < 0) {
-                            this.vx -= 2 * dot * nx;
-                            this.vy -= 2 * dot * ny;
-                            hitWall = true;
+                            let dot = this.vx * nx + this.vy * ny;
+                            if (dot < 0) {
+                                this.vx -= 2 * dot * nx;
+                                this.vy -= 2 * dot * ny;
+                                hitWallThisFrame = true;
+                            }
+                        }
+                    }
+
+                    this.x += overlapOffset.x;
+                    this.y += overlapOffset.y;
+
+                    // Emergency Pull-back
+                    let dCenter = Math.hypot(this.x - boardShape.cx, this.y - boardShape.cy);
+                    if (dCenter > boardShape.r + this.radius) {
+                        let pX = boardShape.cx - this.x, pY = boardShape.cy - this.y;
+                        let pLen = Math.hypot(pX, pY);
+                        this.x += (pX / pLen) * 5;
+                        this.y += (pY / pLen) * 5;
+                    }
+                    
+                    if (hitWallThisFrame) {
+                        for(let p of boardShape.pockets) {
+                            let dToP = Math.hypot(this.x - p.x, this.y - p.y);
+                            if (dToP < minSubDistToPocket) minSubDistToPocket = dToP;
                         }
                     }
                 }
 
-                this.x += overlapOffset.x;
-                this.y += overlapOffset.y;
-
-                // Emergency Pull-back if perfectly escaped
-                let dCenter = Math.hypot(this.x - boardShape.cx, this.y - boardShape.cy);
-                if (dCenter > boardShape.r + this.radius) {
-                    let pX = boardShape.cx - this.x, pY = boardShape.cy - this.y;
-                    let pLen = Math.hypot(pX, pY);
-                    this.x += (pX / pLen) * 10;
-                    this.y += (pY / pLen) * 10;
-                }
-
                 // PRECISION MATH
-                if (hitWall) {
-                    for(let p of boardShape.pockets) {
-                        let dToP = Math.hypot(this.x - p.x, this.y - p.y);
-                        if (dToP < minDistToPocket) minDistToPocket = dToP;
-                    }
+                if (hitWallThisFrame) {
                     const detectionRadius = 80; 
-                    if (minDistToPocket < detectionRadius && frameCount - this.lastBounce > 5) {
+                    if (minSubDistToPocket < detectionRadius && frameCount - this.lastBounce > 5) {
                         gameState.bounces++;
-                        const calcPrecision = 1 - (minDistToPocket / detectionRadius);
+                        const calcPrecision = 1 - (minSubDistToPocket / detectionRadius);
                         
                         const uiPrecision = document.getElementById('ui-precision');
                         if (uiPrecision) uiPrecision.innerText = calcPrecision.toFixed(4);
@@ -503,17 +534,15 @@
             
             let activeRule = 30;
             
-            // TRAJECTORY RULIAD INJECTION: Ball's path creates standing waves on the background!
             if (playerBall && gameState.state === 'PLAYING') {
                 let ballCaX = Math.floor((playerBall.x / WIDTH) * CA_W);
                 if (ballCaX >= 0 && ballCaX < CA_W) {
-                    caData[ballCaX] = 1; // Inject seed
-                    caData[Math.max(0, ballCaX - 1)] = 1; // Widen brush
+                    caData[ballCaX] = 1; 
+                    caData[Math.max(0, ballCaX - 1)] = 1; 
                     caData[Math.min(CA_W - 1, ballCaX + 1)] = 1;
                 }
             }
 
-            // AUDIO RULIAD MUTATION
             if (micEnabled && currentAudioLevel > 15) {
                 activeRule = Math.floor(currentAudioLevel) ^ (frameCount % 255);
                 const step = Math.max(1, Math.floor((dataArray.length / 2) / CA_W));
@@ -527,7 +556,6 @@
                 const center = caData[x] ? 2 : 0;
                 const right = caData[x === CA_W - 1 ? 0 : x + 1] ? 1 : 0;
                 
-                // Don't overwrite if it was just injected by the ball/mic
                 if (caData[x] !== 1) {
                     caData[x] = (activeRule & (1 << (left + center + right))) ? 1 : 0;
                 }
@@ -559,7 +587,6 @@
                 if(trailData[i] > 0) trailData[i] = Math.max(0, trailData[i] - 2);
             }
 
-            // CYMATIC AUDIO INJECTION: Generate beautiful standing wave artifacts in the pool table
             if (micEnabled && currentAudioLevel > 20) {
                 for (let y = 0; y < B_CA_SIZE; y++) {
                     for (let x = 0; x < B_CA_SIZE; x++) {
@@ -568,11 +595,9 @@
                         let angle = Math.atan2(dy, dx);
                         let dist = Math.hypot(dx, dy);
                         
-                        // Map polar angle to an FFT frequency bin
                         let bin = Math.floor((Math.abs(angle) / Math.PI) * (dataArray.length / 4));
                         let amp = dataArray[bin] || 0;
                         
-                        // Create geometric mandala/chladni artifacts based on audio peaks
                         if (amp > 100 && Math.abs(dist - (amp/255) * (B_CA_SIZE/2)) < 2) {
                              trailData[y * B_CA_SIZE + x] = 255;
                         }
@@ -581,8 +606,6 @@
             }
 
             const imgData = bCtx.createImageData(B_CA_SIZE, B_CA_SIZE);
-            
-            // Audio dynamically shifts the "time" variable of the math
             const t = Math.floor(frameCount / 4) + Math.floor(currentAudioLevel / 10);
 
             for (let y = 0; y < B_CA_SIZE; y++) {
@@ -591,19 +614,16 @@
                     const cy = y - B_CA_SIZE/2;
                     
                     let val = 0;
-                    
-                    // 8 Unique Ruliad Mathematical Formulas (Simple rules, complex artifacts)
                     const ruleMod = currentRule % 8;
-                    if (ruleMod === 0) val = (cx ^ cy) - t;                           // XOR Sierpinski
-                    else if (ruleMod === 1) val = (cx & cy) * t;                      // AND Tech-Grid
-                    else if (ruleMod === 2) val = (cx | cy) ^ t;                      // OR Maze
-                    else if (ruleMod === 3) val = Math.floor(Math.sqrt(cx*cx + cy*cy)) * ((t%5) + 1); // Radial Pulses
-                    else if (ruleMod === 4) val = (cx * cx ^ cy * cy) % Math.max(1, t); // Hyperbolic XOR
-                    else if (ruleMod === 5) val = (cx * t) ^ (cy * t);                // Zooming Munching Squares
-                    else if (ruleMod === 6) val = ((cx+t) ^ (cy-t)) % (Math.floor(currentAudioLevel/10)+2); // Audio Glitch Modulo
-                    else if (ruleMod === 7) val = Math.abs(Math.sin(cx/10)*Math.cos(cy/10)) * 255; // Trig Interference
+                    if (ruleMod === 0) val = (cx ^ cy) - t;                           
+                    else if (ruleMod === 1) val = (cx & cy) * t;                      
+                    else if (ruleMod === 2) val = (cx | cy) ^ t;                      
+                    else if (ruleMod === 3) val = Math.floor(Math.sqrt(cx*cx + cy*cy)) * ((t%5) + 1); 
+                    else if (ruleMod === 4) val = (cx * cx ^ cy * cy) % Math.max(1, t); 
+                    else if (ruleMod === 5) val = (cx * t) ^ (cy * t);                
+                    else if (ruleMod === 6) val = ((cx+t) ^ (cy-t)) % (Math.floor(currentAudioLevel/10)+2); 
+                    else if (ruleMod === 7) val = Math.abs(Math.sin(cx/10)*Math.cos(cy/10)) * 255; 
                     
-                    // Layer the Ball Trajectory and Voice Cymatics over the Math
                     val = Math.abs(val + trailData[y * B_CA_SIZE + x]);
                     
                     const colorIndex = val % 4;
@@ -611,9 +631,9 @@
                     
                     let r = c[0], g = c[1], b = c[2];
                     if (trailData[y * B_CA_SIZE + x] > 200) {
-                        r = 255; g = 255; b = 0; // Pure Voice Injection (Yellow)
+                        r = 255; g = 255; b = 0; 
                     } else if (trailData[y * B_CA_SIZE + x] > 50) {
-                        r = 255; g = 0; b = 150; // Ball Trail (Pink)
+                        r = 255; g = 0; b = 150; 
                     }
 
                     const idx = (y * B_CA_SIZE + x) * 4;
@@ -628,34 +648,7 @@
 
         function drawBoard() {
             ctx.save();
-            drawShapePath(ctx, boardShape, false); // Clip using pure math boundary
-            ctx.clip(); 
-
-            ctx.imageSmoothingEnabled = false;
-            ctx.drawImage(boardCanvas, boardRect.x, boardRect.y, boardRect.size, boardRect.size);
-            ctx.restore();
-
-            // Draw the deformed, voice-reactive boundary!
-            ctx.strokeStyle = '#fff';
-            ctx.lineWidth = 4;
-            drawShapePath(ctx, boardShape, true); // Stroke with audio distortion
-            ctx.stroke();
-
-            ctx.fillStyle = '#000';
-            ctx.strokeStyle = '#fff';
-            ctx.lineWidth = 3;
-            
-            boardShape.pockets.forEach(p => {
-                ctx.beginPath();
-                ctx.arc(p.x, p.y, POCKET_RADIUS, 0, Math.PI * 2);
-                ctx.fill();
-                ctx.stroke();
-            });
-        }
-
-        function drawThickMunkerWhite() {
-            ctx.save();
-            drawShapePath(ctx, boardShape, false); // Clip to pure board shape
+            drawShapePath(ctx, boardShape, false); 
             ctx.clip(); 
 
             ctx.imageSmoothingEnabled = false;
@@ -664,7 +657,7 @@
 
             ctx.strokeStyle = '#fff';
             ctx.lineWidth = 4;
-            drawShapePath(ctx, boardShape);
+            drawShapePath(ctx, boardShape, true); 
             ctx.stroke();
 
             ctx.fillStyle = '#000';
@@ -716,18 +709,58 @@
                 ctx.drawImage(ruliadCanvas, 0, 0, WIDTH, HEIGHT);
             }
 
+            // === THE VOID TUNNEL TRANSITION ===
             if (gameState.state === 'TRANSITION') {
                 gameState.transitionTimer--;
+                let prog = 1 - (gameState.transitionTimer / 150); // 0.0 to 1.0
                 
-                ctx.fillStyle = `hsl(${(frameCount * 10) % 360}, 100%, 50%)`;
-                ctx.font = '30px "Press Start 2P"';
-                ctx.textAlign = 'center';
-                ctx.fillText("DIMENSION", WIDTH/2, HEIGHT/2 - 20);
-                ctx.fillText("SHIFT", WIDTH/2, HEIGHT/2 + 20);
+                // Darken background
+                ctx.fillStyle = `rgba(0,0,0,${Math.min(1, prog * 1.5)})`;
+                ctx.fillRect(0, 0, WIDTH, HEIGHT);
+
+                let cx = gameState.sinkHole.x;
+                let cy = gameState.sinkHole.y;
+                
+                // Draw 3D Tunnel Rings
+                for (let i = 0; i < 15; i++) {
+                    let ringT = (i / 15 + prog * 4) % 1; 
+                    let scale = Math.pow(ringT, 4) * 6; 
+                    let alpha = 1 - Math.abs(ringT - 0.5) * 2;
+                    
+                    ctx.save();
+                    ctx.translate(cx, cy); 
+                    ctx.scale(scale, scale);
+                    ctx.rotate(prog * Math.PI * 2 + ringT * Math.PI);
+                    ctx.translate(-cx, -cy);
+                    
+                    ctx.globalAlpha = Math.max(0, alpha);
+                    // Draw repeating Ruliad borders to form the tunnel
+                    ctx.strokeStyle = `hsl(${(prog * 360 + i * 24) % 360}, 100%, 50%)`;
+                    ctx.lineWidth = 4 / scale; 
+                    drawShapePath(ctx, boardShape, false);
+                    ctx.stroke();
+                    ctx.restore();
+                }
+
+                // Ball falling into the abyss
+                if (prog < 0.6) {
+                    let ballScale = 1 - (prog / 0.6);
+                    ctx.save();
+                    ctx.translate(cx, cy);
+                    ctx.scale(ballScale, ballScale);
+                    ctx.fillStyle = playerBall.trueColor;
+                    ctx.beginPath(); ctx.arc(0, 0, playerBall.radius, 0, Math.PI * 2); ctx.fill();
+                    ctx.restore();
+                }
                 
                 ctx.fillStyle = '#fff';
-                ctx.font = '12px "Press Start 2P"';
-                ctx.fillText(`BOUNCES SURVIVED: ${gameState.bounces}`, WIDTH/2, HEIGHT/2 + 60);
+                ctx.font = '24px "Press Start 2P"';
+                ctx.textAlign = 'center';
+                ctx.globalAlpha = Math.min(1, prog * 2);
+                ctx.fillText("DIMENSION SHIFT", WIDTH/2, HEIGHT/2 - 20);
+                ctx.font = '10px "Press Start 2P"';
+                ctx.fillText(`SURVIVED: ${gameState.bounces} BOUNCES`, WIDTH/2, HEIGHT/2 + 20);
+                ctx.globalAlpha = 1.0;
 
                 if (gameState.transitionTimer <= 0) {
                     gameState.state = 'PLAYING';
@@ -741,6 +774,7 @@
                 return; 
             }
 
+            // === NORMAL PLAY ===
             updateBoardRuliad();
             drawBoard();
 
