@@ -140,6 +140,7 @@
         let boardRect = { x: 0, y: 0, size: 0 };
         
         let currentRule = 0; 
+        let bgRule = 30; // The unique background 1D rule
         let frameCount = 0;
 
         let gameState = {
@@ -230,7 +231,6 @@
                 let sides = (primeMod % 3) + 4; 
                 let startAngle = -Math.PI / 2; 
                 for(let i=0; i<sides * 2; i++) {
-                    // Widen the inner radius so the ball doesn't get wedged
                     let r = i % 2 === 0 ? R : R * 0.65; 
                     let angle = startAngle + (i * Math.PI) / sides;
                     let px = cx + r * Math.cos(angle);
@@ -341,6 +341,11 @@
             if (uiDim) uiDim.innerText = `${gameState.dimension} (${boardShape.type})`;
 
             currentRule = (currentRule + 1) % 8; 
+            
+            // Randomize the 1D background rule for truly unique voids (110, 90, 150, 30, 105 etc)
+            const interestingRules = [30, 90, 110, 150, 105, 73, 22, 126, 45, 169];
+            bgRule = interestingRules[Math.floor(Math.random() * interestingRules.length)];
+
             currentPalette = palettes[gameState.dimension % palettes.length];
             currentMunkerPair = munkerPairs[gameState.dimension % munkerPairs.length];
 
@@ -353,7 +358,7 @@
         }
 
         // --- PHYSICS & BALL ---
-        const POCKET_RADIUS = 24; // Reduced from 36 to make holes smaller and fairer
+        const POCKET_RADIUS = 28; 
 
         class Ball {
             constructor(x, y, vx, vy, radius) {
@@ -364,7 +369,6 @@
             }
 
             update() {
-                // Sonic Drive Impulse
                 if (micEnabled && currentAudioLevel > 20) {
                     const dx = this.x - boardShape.cx;
                     const dy = this.y - boardShape.cy;
@@ -375,7 +379,7 @@
                 }
 
                 const speed = Math.hypot(this.vx, this.vy);
-                if (speed > 10) { // Reduced max speed from 12 to 10 for better control
+                if (speed > 10) { 
                     this.vx = (this.vx / speed) * 10;
                     this.vy = (this.vy / speed) * 10;
                 }
@@ -385,6 +389,7 @@
                 const dt = 1 / subSteps;
                 let hitWallThisFrame = false;
                 let minSubDistToPocket = Infinity;
+                let disableWallCollisionThisFrame = false; // The Black Hole Fix
 
                 for (let step = 0; step < subSteps; step++) {
                     
@@ -394,16 +399,21 @@
                         let dy = p.y - this.y;
                         let dist = Math.hypot(dx, dy);
                         
-                        // Gravity well to pull the ball in once it gets to the tip
-                        let pullRadius = POCKET_RADIUS * 2.0; 
+                        let pullRadius = POCKET_RADIUS * 2.5; 
                         if (dist < pullRadius && dist > 0) {
-                            let gravity = 0.8 * (1 - dist / pullRadius) * dt; 
+                            let gravity = 1.0 * (1 - dist / pullRadius) * dt; 
                             this.vx += (dx / dist) * gravity;
                             this.vy += (dy / dist) * gravity;
                         }
 
-                        // Forgiving Sink Detection: Triggers when the ball overlaps the pocket center
-                        if (dist < POCKET_RADIUS * 1.1) {
+                        // EVENT HORIZON: If we are close enough to risk getting wedged, 
+                        // we disable the walls and let the pocket devour the ball.
+                        if (dist < POCKET_RADIUS * 1.6) {
+                            disableWallCollisionThisFrame = true;
+                        }
+
+                        // THE SINK
+                        if (dist < POCKET_RADIUS * 1.2) {
                             triggerTransition(p); 
                             return; 
                         }
@@ -435,55 +445,57 @@
                         }
                     }
 
-                    // STRICT BULLETPROOF COLLISION
-                    let overlapOffset = {x: 0, y: 0};
-                    
-                    for(let i=0; i<boardShape.vertices.length; i++) {
-                        let A = boardShape.vertices[i];
-                        let B = boardShape.vertices[(i+1)%boardShape.vertices.length];
+                    // STRICT BULLETPROOF COLLISION (Ignored if falling into a hole)
+                    if (!disableWallCollisionThisFrame) {
+                        let overlapOffset = {x: 0, y: 0};
                         
-                        let dx = B.x - A.x;
-                        let dy = B.y - A.y;
-                        let len2 = dx*dx + dy*dy;
-                        if(len2 === 0) continue;
+                        for(let i=0; i<boardShape.vertices.length; i++) {
+                            let A = boardShape.vertices[i];
+                            let B = boardShape.vertices[(i+1)%boardShape.vertices.length];
+                            
+                            let dx = B.x - A.x;
+                            let dy = B.y - A.y;
+                            let len2 = dx*dx + dy*dy;
+                            if(len2 === 0) continue;
 
-                        let tLine = ((this.x - A.x) * dx + (this.y - A.y) * dy) / len2;
-                        tLine = Math.max(0, Math.min(1, tLine)); 
+                            let tLine = ((this.x - A.x) * dx + (this.y - A.y) * dy) / len2;
+                            tLine = Math.max(0, Math.min(1, tLine)); 
 
-                        let closestX = A.x + tLine * dx;
-                        let closestY = A.y + tLine * dy;
+                            let closestX = A.x + tLine * dx;
+                            let closestY = A.y + tLine * dy;
 
-                        let distX = this.x - closestX;
-                        let distY = this.y - closestY;
-                        let dist = Math.hypot(distX, distY);
+                            let distX = this.x - closestX;
+                            let distY = this.y - closestY;
+                            let dist = Math.hypot(distX, distY);
 
-                        if (dist < this.radius && dist > 0.01) {
-                            let nx = distX / dist;
-                            let ny = distY / dist;
+                            if (dist < this.radius && dist > 0.01) {
+                                let nx = distX / dist;
+                                let ny = distY / dist;
 
-                            let overlap = this.radius - dist;
-                            overlapOffset.x += nx * overlap;
-                            overlapOffset.y += ny * overlap;
+                                let overlap = this.radius - dist;
+                                overlapOffset.x += nx * overlap;
+                                overlapOffset.y += ny * overlap;
 
-                            let dot = this.vx * nx + this.vy * ny;
-                            if (dot < 0) {
-                                this.vx -= 2 * dot * nx;
-                                this.vy -= 2 * dot * ny;
-                                hitWallThisFrame = true;
+                                let dot = this.vx * nx + this.vy * ny;
+                                if (dot < 0) {
+                                    this.vx -= 2 * dot * nx;
+                                    this.vy -= 2 * dot * ny;
+                                    hitWallThisFrame = true;
+                                }
                             }
                         }
-                    }
 
-                    this.x += overlapOffset.x;
-                    this.y += overlapOffset.y;
+                        this.x += overlapOffset.x;
+                        this.y += overlapOffset.y;
 
-                    // Emergency Pull-back
-                    let dCenter = Math.hypot(this.x - boardShape.cx, this.y - boardShape.cy);
-                    if (dCenter > boardShape.r + this.radius) {
-                        let pX = boardShape.cx - this.x, pY = boardShape.cy - this.y;
-                        let pLen = Math.hypot(pX, pY);
-                        this.x += (pX / pLen) * 5;
-                        this.y += (pY / pLen) * 5;
+                        // Emergency Pull-back (Only if we aren't sinking)
+                        let dCenter = Math.hypot(this.x - boardShape.cx, this.y - boardShape.cy);
+                        if (dCenter > boardShape.r + this.radius) {
+                            let pX = boardShape.cx - this.x, pY = boardShape.cy - this.y;
+                            let pLen = Math.hypot(pX, pY);
+                            this.x += (pX / pLen) * 5;
+                            this.y += (pY / pLen) * 5;
+                        }
                     }
                     
                     if (hitWallThisFrame) {
@@ -548,7 +560,7 @@
                 }
             }
             
-            let activeRule = 30;
+            let activeRule = bgRule; // Uses unique dimension rule
             
             if (playerBall && gameState.state === 'PLAYING') {
                 let ballCaX = Math.floor((playerBall.x / WIDTH) * CA_W);
@@ -581,7 +593,6 @@
             const bgCol = currentPalette[0];
             const fgCol = currentPalette[2]; 
 
-            // Unified dimension background rendering (no baseline flashing)
             for (let y = 0; y < CA_H; y++) {
                 for (let x = 0; x < CA_W; x++) {
                     const i = y * CA_W + x;
@@ -603,12 +614,10 @@
         }
 
         function updateBoardRuliad() {
-            // Fade Trail Data
             for(let i = 0; i < trailData.length; i++) {
                 if(trailData[i] > 0) trailData[i] = Math.max(0, trailData[i] - 2);
             }
 
-            // Cymatic Audio Ring Generator
             if (micEnabled && currentAudioLevel > 20) {
                 for (let y = 0; y < B_CA_SIZE; y++) {
                     for (let x = 0; x < B_CA_SIZE; x++) {
@@ -628,18 +637,17 @@
             }
 
             const imgData = bCtx.createImageData(B_CA_SIZE, B_CA_SIZE);
-            const t = Math.floor(frameCount / 4);
+            const t = Math.floor(frameCount / 3); // Faster time variable
             const audioShift = Math.floor(currentAudioLevel / 15);
+            const dimMod = (gameState.dimension % 5) + 1; // Creates unique math scales per dimension
 
             for (let y = 0; y < B_CA_SIZE; y++) {
                 for (let x = 0; x < B_CA_SIZE; x++) {
                     let i = y * B_CA_SIZE + x;
                     
-                    // Audio shifts coordinate space to warp rules
                     let cx = x - B_CA_SIZE/2 + audioShift;
                     let cy = y - B_CA_SIZE/2 - audioShift;
                     
-                    // Neighborhood Average (Organic CA Feedback Loop)
                     let nSum = 0, nCount = 0;
                     if (x > 0) { nSum += bData[i - 1]; nCount++; }
                     if (x < B_CA_SIZE - 1) { nSum += bData[i + 1]; nCount++; }
@@ -650,26 +658,26 @@
                     let vMath = 0;
                     const ruleMod = currentRule % 8;
                     
-                    if (ruleMod === 0) vMath = (cx ^ cy);                           
-                    else if (ruleMod === 1) vMath = (cx & cy);                      
-                    else if (ruleMod === 2) vMath = (cx | cy);                      
-                    else if (ruleMod === 3) vMath = Math.floor(Math.sqrt(cx*cx + cy*cy)); 
-                    else if (ruleMod === 4) vMath = (cx * cx ^ cy * cy); 
-                    else if (ruleMod === 5) vMath = (cx * cy) ^ cx;                
-                    else if (ruleMod === 6) vMath = (cx+cy) ^ (cx-cy); 
-                    else if (ruleMod === 7) vMath = Math.abs(cx * 2 ^ cy * 2); 
+                    // The dimension directly modifies the mathematical structure!
+                    if (ruleMod === 0) vMath = (cx * dimMod) ^ (cy * dimMod);                           
+                    else if (ruleMod === 1) vMath = (cx & cy) * dimMod;                      
+                    else if (ruleMod === 2) vMath = (cx | cy) * dimMod;                      
+                    else if (ruleMod === 3) vMath = Math.floor(Math.sqrt(cx*cx + cy*cy)) * dimMod; 
+                    else if (ruleMod === 4) vMath = ((cx * cx) ^ (cy * cy)) % Math.max(1, t); 
+                    else if (ruleMod === 5) vMath = (cx * cy) ^ cx * dimMod;                
+                    else if (ruleMod === 6) vMath = (cx+cy) ^ ((cx-cy) * dimMod); 
+                    else if (ruleMod === 7) vMath = Math.abs(cx * dimMod ^ cy * dimMod); 
                     
-                    // Generative math applies to ITSELF! (Feedback combination)
                     let val = Math.abs(vMath - t*2 + avg * 0.9 + trailData[i]*1.5);
                     bDataNext[i] = val % 256;
                     
-                    // Assign to the 4 dimensional palette colors
-                    let colorIndex = Math.floor(bDataNext[i] / 64) % 4; 
-                    const c = currentPalette[colorIndex];
+                    // Time-based Color Cycling! Shifts colors so the static patterns appear to move.
+                    let colorShift = Math.floor(frameCount / 15);
+                    let colorIndex = (Math.floor(bDataNext[i] / 64) + colorShift) % 4; 
                     
+                    const c = currentPalette[colorIndex];
                     let r = c[0], g = c[1], b = c[2];
                     
-                    // High-contrast Voice / Trail Overrides
                     if (trailData[i] > 200) {
                         r = 255; g = 255; b = 0; 
                     } else if (trailData[i] > 50) {
@@ -683,7 +691,6 @@
                     imgData.data[idx+3] = 255;
                 }
             }
-            // Swap double buffer
             for (let i = 0; i < B_CA_SIZE * B_CA_SIZE; i++) bData[i] = bDataNext[i];
             
             bCtx.putImageData(imgData, 0, 0);
@@ -775,7 +782,6 @@
                     ctx.translate(-cx, -cy);
                     
                     ctx.globalAlpha = Math.max(0, alpha);
-                    // Match tunnel color to dimensional palette
                     let cIndex = i % 4;
                     ctx.strokeStyle = `rgb(${currentPalette[cIndex][0]}, ${currentPalette[cIndex][1]}, ${currentPalette[cIndex][2]})`;
                     ctx.lineWidth = 4 / scale; 
