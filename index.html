@@ -32,7 +32,7 @@
 
         .hud {
             position: absolute;
-            top: 20px;
+            top: 15px;
             left: 50%;
             transform: translateX(-50%);
             width: 95%;
@@ -40,25 +40,22 @@
             display: flex;
             justify-content: space-between;
             font-size: 10px;
-            text-shadow: 2px 2px 0 #000;
-            color: #aaa;
+            text-shadow: 3px 3px 0 #000, -1px -1px 0 #000;
+            color: #0ff;
             z-index: 10;
-            background: rgba(0, 0, 0, 0.85);
-            padding: 12px;
-            border: 2px solid #333;
-            border-radius: 4px;
-            transition: border-color 0.2s;
+            background: rgba(0, 0, 0, 0.6);
+            padding: 10px;
+            border: 2px solid #0ff;
         }
 
         .hud span { flex: 1; text-align: center; }
-        .hud-highlight { color: #0ff; }
-        .hud-alert { color: #f0f; }
+        .hud-highlight { color: #f0f; }
         .hud-mic { color: #ff0; cursor: pointer; }
 
         .scanlines {
             position: absolute;
             top: 0; left: 0; width: 100vw; height: 100vh;
-            background: linear-gradient(to bottom, rgba(255,255,255,0), rgba(255,255,255,0) 50%, rgba(0,0,0,0.2) 50%, rgba(0,0,0,0.2));
+            background: linear-gradient(to bottom, rgba(255,255,255,0), rgba(255,255,255,0) 50%, rgba(0,0,0,0.3) 50%, rgba(0,0,0,0.3));
             background-size: 100% 4px;
             pointer-events: none;
             z-index: 5;
@@ -84,47 +81,51 @@
         // --- BACKGROUND RULIAD SETUP ---
         const ruliadCanvas = document.createElement('canvas');
         const rCtx = ruliadCanvas.getContext('2d');
-        const CA_PIXEL = 6;
+        const CA_PIXEL = 8;
         let CA_W = 1, CA_H = 1, caData;
         
         // --- BOARD RULIAD (POOL TABLE) SETUP ---
         const boardCanvas = document.createElement('canvas');
         const bCtx = boardCanvas.getContext('2d');
-        const B_CA_SIZE = 100; // Increased density for standing wave texture
+        const B_CA_SIZE = 64; 
         boardCanvas.width = B_CA_SIZE;
         boardCanvas.height = B_CA_SIZE;
         
-        let bData = new Uint8Array(B_CA_SIZE * B_CA_SIZE);
-        let bDataNext = new Uint8Array(B_CA_SIZE * B_CA_SIZE);
         let trailData = new Uint8Array(B_CA_SIZE * B_CA_SIZE); 
         
-        let colBoardBg = [10, 20, 35];     
-        let colBoardCA = [0, 255, 150];    
-        let colTrail   = [255, 0, 150];    
-        let colVoice   = [255, 255, 0];    
+        const palettes = [
+            [[0,255,255], [255,0,255], [255,255,0], [0,0,255]], 
+            [[0,255,0], [128,0,128], [0,128,255], [255,165,0]], 
+            [[255,0,100], [0,255,100], [100,0,255], [255,255,255]] 
+        ];
+        let currentPalette = palettes[0];
+        
+        // Requested Harmonic Munker-White Pairs
+        const munkerPairs = [
+            ['#00FFFF', '#FF00FF'], // Cyan / Magenta
+            ['#800080', '#00FF00'], // Purple / Green
+            ['#0000FF', '#FFFF00'], // Blue / Yellow
+            ['#FF0000', '#0000FF']  // Red / Blue
+        ];
+        let currentMunkerPair = munkerPairs[0];
         
         let WIDTH = window.innerWidth || 800;
         let HEIGHT = window.innerHeight || 600;
         
         // Dynamic Geometry State
-        let boardPoly = { sides: 4, cx: 0, cy: 0, r: 0, vertices: [] };
+        let boardShape = { type: 'HYPERBOLIC_SQUARE', cx: 0, cy: 0, r: 0, vertices: [], pockets: [] };
         let boardRect = { x: 0, y: 0, size: 0 };
         
-        let currentRule = 30;
+        let currentRule = 0; 
         let frameCount = 0;
-        let baseMunkerHue = 0; // Drifts endlessly
-
-        const SHAPE_NAMES = { 3: 'TRI', 4: 'SQR', 5: 'PENT', 6: 'HEX', 8: 'OCT' };
 
         let gameState = {
             dimension: 1,
             bounces: 0,
             best: 0,
-            state: 'PLAYING', // 'PLAYING' or 'TRANSITION'
+            state: 'PLAYING', 
             transitionTimer: 0
         };
-
-        let shockwaves = [];
 
         // --- AUDIO ENGINE ---
         let audioCtx, analyser, dataArray;
@@ -151,24 +152,75 @@
         }
         document.addEventListener('click', initAudio, { once: true });
 
-        // --- GEOMETRY GENERATOR ---
-        function generateGeometry(sides) {
+        // --- GENERATIVE MESH GEOMETRY ---
+        function generateGeometry() {
             const cx = WIDTH / 2;
-            const cy = HEIGHT / 2 + 25; // Shifted slightly down for HUD
-            // Maximize size to fit screen better (0.46 covers ~92% of smallest screen dimension)
-            const R = Math.max(10, Math.min(WIDTH, HEIGHT) * 0.46); 
+            const cy = HEIGHT / 2 + 25; 
+            const R = Math.max(10, Math.min(WIDTH, HEIGHT) * 0.44); 
             
             let verts = [];
-            // Start angle offsets to make shapes sit flat at the bottom
-            let startAngle = sides % 2 === 0 ? Math.PI / sides : -Math.PI / 2; 
+            let pockets = [];
             
-            for(let i=0; i<sides; i++) {
-                let angle = startAngle + (i * 2 * Math.PI / sides);
-                verts.push({ x: cx + R * Math.cos(angle), y: cy + R * Math.sin(angle) });
+            const types = ['HYPERBOLIC_SQUARE', 'POLYGON', 'STAR'];
+            const type = types[gameState.dimension % types.length];
+            
+            if (type === 'HYPERBOLIC_SQUARE') {
+                // Matches Screenshot 2: Square intersecting with 4 lobes
+                const resolution = 200;
+                const sqBaseR = R * 0.65;
+                for(let i=0; i<resolution; i++) {
+                    let theta = (i / resolution) * Math.PI * 2;
+                    let cosT = Math.abs(Math.cos(theta));
+                    let sinT = Math.abs(Math.sin(theta));
+                    let rSq = sqBaseR / Math.max(cosT, sinT);
+                    let rLobe = R * 0.6 + R * 0.4 * Math.cos(4 * theta);
+                    
+                    let rFinal = Math.max(rSq, rLobe);
+                    verts.push({ x: cx + rFinal * Math.cos(theta), y: cy + rFinal * Math.sin(theta) });
+                }
+                for(let i=0; i<4; i++) {
+                    let angle = (i * Math.PI / 2) + Math.PI/4;
+                    let px = cx + (sqBaseR / Math.cos(Math.PI/4)) * Math.cos(angle);
+                    let py = cy + (sqBaseR / Math.cos(Math.PI/4)) * Math.sin(angle);
+                    pockets.push({x: px, y: py});
+                }
+            }
+            else if (type === 'POLYGON') {
+                let sides = (gameState.dimension % 4) + 4; // 4 to 7
+                let startAngle = -Math.PI / 2; 
+                for(let i=0; i<sides; i++) {
+                    let angle = startAngle + (i * 2 * Math.PI / sides);
+                    let px = cx + R * Math.cos(angle);
+                    let py = cy + R * Math.sin(angle);
+                    verts.push({ x: px, y: py });
+                    pockets.push({ x: px, y: py });
+                }
+            } 
+            else if (type === 'STAR') {
+                let sides = (gameState.dimension % 3) + 4; 
+                let startAngle = -Math.PI / 2; 
+                for(let i=0; i<sides * 2; i++) {
+                    let r = i % 2 === 0 ? R : R * 0.5;
+                    let angle = startAngle + (i * Math.PI) / sides;
+                    let px = cx + r * Math.cos(angle);
+                    let py = cy + r * Math.sin(angle);
+                    verts.push({ x: px, y: py });
+                    if (i % 2 === 0) pockets.push({ x: px, y: py });
+                }
             }
             
-            boardPoly = { sides, cx, cy, r: R, vertices: verts };
+            boardShape = { type, cx, cy, r: R, vertices: verts, pockets: pockets };
             boardRect = { x: cx - R, y: cy - R, size: R * 2 };
+        }
+
+        function drawShapePath(ctx, shape) {
+            ctx.beginPath();
+            if (shape.vertices.length === 0) return;
+            ctx.moveTo(shape.vertices[0].x, shape.vertices[0].y);
+            for(let i=1; i<shape.vertices.length; i++) {
+                ctx.lineTo(shape.vertices[i].x, shape.vertices[i].y);
+            }
+            ctx.closePath();
         }
 
         // --- RESIZE ---
@@ -184,7 +236,7 @@
             caData = new Uint8Array(CA_W * CA_H);
             caData[Math.floor(CA_W / 2)] = 1;
 
-            generateGeometry(boardPoly.sides);
+            generateGeometry();
         }
 
         window.addEventListener('resize', () => { resize(); initBall(); });
@@ -192,45 +244,30 @@
         // --- GAME LOGIC ---
         function triggerTransition() {
             gameState.state = 'TRANSITION';
-            gameState.transitionTimer = 120; // 2 seconds at 60fps
+            gameState.transitionTimer = 100; 
             
-            // Check High Score
             if (gameState.bounces > gameState.best) {
                 gameState.best = gameState.bounces;
                 document.getElementById('ui-best').innerText = gameState.best;
             }
-            
-            // Randomly force high "audio" logic to make the background CA explode
-            currentAudioLevel = 80;
+            currentAudioLevel = 90; 
         }
 
         function nextDimension() {
             gameState.dimension++;
             
             document.getElementById('ui-panel').style.borderColor = '#f0f';
-            setTimeout(() => document.getElementById('ui-panel').style.borderColor = '#333', 300);
+            setTimeout(() => document.getElementById('ui-panel').style.borderColor = '#0ff', 300);
 
-            // Morph the world geometry
-            const possibleSides = [3, 4, 5, 6, 8];
-            const newSides = possibleSides[Math.floor(Math.random() * possibleSides.length)];
-            generateGeometry(newSides);
+            generateGeometry();
             
-            document.getElementById('ui-dim').innerText = `${gameState.dimension} (${SHAPE_NAMES[newSides]})`;
+            document.getElementById('ui-dim').innerText = `${gameState.dimension} (${boardShape.type})`;
 
-            const interestingRules = [30, 90, 110, 54, 18, 22, 126, 150];
-            currentRule = interestingRules[Math.floor(Math.random() * interestingRules.length)];
-
-            // Randomize Parity Board & Standing Wave Colors
-            colBoardBg = [Math.random()*30, Math.random()*30, Math.random()*50];
-            colBoardCA = [Math.random()*255, Math.random()*255, Math.random()*255];
-            colTrail   = [Math.random()*255, Math.random()*255, Math.random()*255];
-            colVoice   = [Math.random()*255, Math.random()*255, Math.random()*255];
-
-            // Add a jolt to the Munker Hue
-            baseMunkerHue = (baseMunkerHue + 90) % 360;
+            currentRule = (currentRule + 1) % 4; 
+            currentPalette = palettes[gameState.dimension % palettes.length];
+            currentMunkerPair = munkerPairs[gameState.dimension % munkerPairs.length];
 
             caData.fill(0);
-            bData.fill(0);
             trailData.fill(0);
             if (caData.length > 0) caData[Math.floor(CA_W / 2)] = 1;
 
@@ -238,47 +275,46 @@
         }
 
         // --- PHYSICS & BALL ---
-        const POCKET_RADIUS = 22;
+        const POCKET_RADIUS = 26;
 
         class Ball {
             constructor(x, y, vx, vy, radius) {
                 this.x = x; this.y = y; this.vx = vx; this.vy = vy; this.radius = radius;
                 this.lastBounce = 0;
                 this.angle = 0; 
-                this.trueColor = '#e0e0e0'; // Neutral bright sphere absorbs Munker-White stripes perfectly
+                this.trueColor = '#ffffff'; 
             }
 
             update() {
                 // Sonic Drive Impulse
-                if (micEnabled && currentAudioLevel > 30) {
-                    const dx = this.x - boardPoly.cx;
-                    const dy = this.y - boardPoly.cy;
+                if (micEnabled && currentAudioLevel > 20) {
+                    const dx = this.x - boardShape.cx;
+                    const dy = this.y - boardShape.cy;
                     const dist = Math.hypot(dx, dy) || 1;
                     
-                    const force = (currentAudioLevel * 0.006) / (dist * 0.01);
+                    const force = (currentAudioLevel * 0.008) / (dist * 0.01);
                     this.vx += (dx / dist) * force;
                     this.vy += (dy / dist) * force;
                 }
 
                 const speed = Math.hypot(this.vx, this.vy);
-                if (speed > 9) {
-                    this.vx = (this.vx / speed) * 9;
-                    this.vy = (this.vy / speed) * 9;
+                if (speed > 12) {
+                    this.vx = (this.vx / speed) * 12;
+                    this.vy = (this.vy / speed) * 12;
                 }
 
                 this.x += this.vx; 
                 this.y += this.vy;
-                this.angle += speed * 0.08;
+                this.angle += speed * 0.1;
 
-                // Write Standing Wave Trajectory
+                // Write to Board CA
                 const caX = Math.floor(((this.x - boardRect.x) / boardRect.size) * B_CA_SIZE);
                 const caY = Math.floor(((this.y - boardRect.y) / boardRect.size) * B_CA_SIZE);
                 
                 let brushRadius = 1;
-                let injectionHeat = 150; 
-                
-                if (micEnabled && currentAudioLevel > 20) {
-                    brushRadius = Math.max(2, Math.floor(currentAudioLevel / 15));
+                let injectionHeat = 120; 
+                if (micEnabled && currentAudioLevel > 15) {
+                    brushRadius = Math.max(2, Math.floor(currentAudioLevel / 12));
                     injectionHeat = 255; 
                 }
                 
@@ -287,48 +323,56 @@
                         if(dx*dx + dy*dy <= brushRadius*brushRadius) {
                             const nx = caX + dx, ny = caY + dy;
                             if(nx >= 0 && nx < B_CA_SIZE && ny >= 0 && ny < B_CA_SIZE) {
-                                bData[ny * B_CA_SIZE + nx] = 255;
                                 trailData[ny * B_CA_SIZE + nx] = injectionHeat;
                             }
                         }
                     }
                 }
 
-                // 1. POCKET SINK LOGIC (Pre-check vertices)
-                for (let v of boardPoly.vertices) {
-                    if (Math.hypot(this.x - v.x, this.y - v.y) < POCKET_RADIUS + this.radius * 0.5) {
+                // POCKET SINK LOGIC
+                for (let p of boardShape.pockets) {
+                    if (Math.hypot(this.x - p.x, this.y - p.y) < POCKET_RADIUS) {
                         triggerTransition();
                         return; 
                     }
                 }
 
-                // 2. POLYGON EDGE COLLISION
+                // STRICT BULLETPROOF COLLISION (Circle vs Line Segments)
                 let hitWall = false;
+                let overlapOffset = {x: 0, y: 0};
+                let minDistToPocket = Infinity;
 
-                for(let i=0; i<boardPoly.sides; i++) {
-                    let A = boardPoly.vertices[i];
-                    let B = boardPoly.vertices[(i+1)%boardPoly.sides];
+                for(let i=0; i<boardShape.vertices.length; i++) {
+                    let A = boardShape.vertices[i];
+                    let B = boardShape.vertices[(i+1)%boardShape.vertices.length];
                     
-                    // Edge normal
-                    let nx = -(B.y - A.y);
-                    let ny = (B.x - A.x);
-                    let len = Math.hypot(nx, ny);
-                    nx /= len; ny /= len;
-                    
-                    // Ensure normal points inward towards polygon center
-                    if (nx * (boardPoly.cx - A.x) + ny * (boardPoly.cy - A.y) < 0) {
-                        nx = -nx; ny = -ny;
-                    }
-                    
-                    // Distance from ball to edge plane
-                    let distToPlane = (this.x - A.x) * nx + (this.y - A.y) * ny;
-                    
-                    if (distToPlane < this.radius) {
-                        // Push out to resolve penetration
-                        this.x += nx * (this.radius - distToPlane);
-                        this.y += ny * (this.radius - distToPlane);
-                        
-                        // Reflect velocity if moving toward the plane
+                    let dx = B.x - A.x;
+                    let dy = B.y - A.y;
+                    let len2 = dx*dx + dy*dy;
+                    if(len2 === 0) continue;
+
+                    // Project ball onto segment
+                    let t = ((this.x - A.x) * dx + (this.y - A.y) * dy) / len2;
+                    t = Math.max(0, Math.min(1, t)); 
+
+                    let closestX = A.x + t * dx;
+                    let closestY = A.y + t * dy;
+
+                    // Distance to segment
+                    let distX = this.x - closestX;
+                    let distY = this.y - closestY;
+                    let dist = Math.hypot(distX, distY);
+
+                    if (dist < this.radius && dist > 0) {
+                        let nx = distX / dist;
+                        let ny = distY / dist;
+
+                        // Push out
+                        let overlap = this.radius - dist;
+                        overlapOffset.x += nx * overlap;
+                        overlapOffset.y += ny * overlap;
+
+                        // Reflect velocity
                         let dot = this.vx * nx + this.vy * ny;
                         if (dot < 0) {
                             this.vx -= 2 * dot * nx;
@@ -338,14 +382,32 @@
                     }
                 }
 
-                // 3. GAME LOGIC: INCREMENT BOUNCES
-                if (hitWall && frameCount - this.lastBounce > 5) {
-                    gameState.bounces++;
-                    this.lastBounce = frameCount;
-                    document.getElementById('ui-winding').innerText = gameState.bounces;
-                    
-                    document.getElementById('ui-panel').style.borderColor = '#0ff';
-                    setTimeout(() => document.getElementById('ui-panel').style.borderColor = '#333', 100);
+                this.x += overlapOffset.x;
+                this.y += overlapOffset.y;
+
+                // Emergency Pull-back if perfectly escaped
+                let dCenter = Math.hypot(this.x - boardShape.cx, this.y - boardShape.cy);
+                if (dCenter > boardShape.r + this.radius) {
+                    let pX = boardShape.cx - this.x, pY = boardShape.cy - this.y;
+                    let pLen = Math.hypot(pX, pY);
+                    this.x += (pX / pLen) * 10;
+                    this.y += (pY / pLen) * 10;
+                }
+
+                // PRECISION MATH
+                if (hitWall) {
+                    for(let p of boardShape.pockets) {
+                        let dToP = Math.hypot(this.x - p.x, this.y - p.y);
+                        if (dToP < minDistToPocket) minDistToPocket = dToP;
+                    }
+                    const detectionRadius = 80; 
+                    if (minDistToPocket < detectionRadius && frameCount - this.lastBounce > 5) {
+                        gameState.bounces++;
+                        const calcPrecision = 1 - (minDistToPocket / detectionRadius);
+                        document.getElementById('ui-precision').innerText = calcPrecision.toFixed(4);
+                        this.lastBounce = frameCount;
+                        document.getElementById('ui-winding').innerText = gameState.bounces;
+                    }
                 }
             }
 
@@ -353,37 +415,26 @@
                 ctx.save();
                 ctx.translate(this.x, this.y);
                 
-                // Shadow
-                ctx.fillStyle = 'rgba(0,0,0,0.6)';
+                ctx.fillStyle = 'rgba(0,0,0,0.8)';
                 ctx.beginPath(); ctx.arc(4, 4, this.radius, 0, Math.PI * 2); ctx.fill();
 
-                // Rotate
                 ctx.rotate(this.angle);
 
-                // Sphere
                 ctx.fillStyle = this.trueColor;
                 ctx.beginPath(); ctx.arc(0, 0, this.radius, 0, Math.PI * 2); ctx.fill();
 
-                // Inner White Ring
-                ctx.fillStyle = '#fff';
+                ctx.fillStyle = '#aaa';
                 ctx.beginPath(); ctx.arc(this.radius*0.2, 0, this.radius * 0.5, 0, Math.PI * 2); ctx.fill();
-                
-                // Center Dot
                 ctx.fillStyle = '#000';
                 ctx.beginPath(); ctx.arc(this.radius*0.2, 0, this.radius * 0.2, 0, Math.PI * 2); ctx.fill();
 
                 ctx.restore();
-
-                // Specular Light Highlight
-                ctx.fillStyle = 'rgba(255,255,255,0.8)';
-                ctx.beginPath(); ctx.arc(this.x - this.radius*0.3, this.y - this.radius*0.3, this.radius*0.2, 0, Math.PI * 2); ctx.fill();
             }
         }
 
         let playerBall;
         function initBall() {
-            // Drop ball near center
-            playerBall = new Ball(boardPoly.cx - 20, boardPoly.cy - 20, 3.5, 2.8, 16);
+            playerBall = new Ball(boardShape.cx - 20, boardShape.cy - 20, 3.5, 2.8, 16);
         }
 
         // --- RENDERING ---
@@ -396,29 +447,45 @@
                 }
             }
             
-            // Audio or Transition Phase causes CA disruption
-            if ((micEnabled && currentAudioLevel > 10) || gameState.state === 'TRANSITION') {
+            let activeRule = 30;
+            
+            // TRAJECTORY RULIAD INJECTION: Ball's path creates standing waves on the background!
+            if (playerBall && gameState.state === 'PLAYING') {
+                let ballCaX = Math.floor((playerBall.x / WIDTH) * CA_W);
+                if (ballCaX >= 0 && ballCaX < CA_W) {
+                    caData[ballCaX] = 1; // Inject seed
+                    caData[Math.max(0, ballCaX - 1)] = 1; // Widen brush
+                    caData[Math.min(CA_W - 1, ballCaX + 1)] = 1;
+                }
+            }
+
+            // AUDIO RULIAD MUTATION
+            if (micEnabled && currentAudioLevel > 15) {
+                activeRule = Math.floor(currentAudioLevel) ^ (frameCount % 255);
                 const step = Math.max(1, Math.floor((dataArray.length / 2) / CA_W));
                 for (let x = 0; x < CA_W; x++) {
-                    const audioVal = dataArray[x * step] || (Math.random() * 100); // Fake data if no mic during transition
-                    caData[x] = (audioVal > 70 + Math.random() * 50) ? 1 : 0;
+                    if (dataArray[x * step] > 80) caData[x] = 1;
                 }
-            } else {
-                for (let x = 0; x < CA_W; x++) {
-                    const left = caData[x === 0 ? CA_W - 1 : x - 1] ? 4 : 0;
-                    const center = caData[x] ? 2 : 0;
-                    const right = caData[x === CA_W - 1 ? 0 : x + 1] ? 1 : 0;
-                    caData[x] = (currentRule & (1 << (left + center + right))) ? 1 : 0;
+            } 
+
+            for (let x = 0; x < CA_W; x++) {
+                const left = caData[x === 0 ? CA_W - 1 : x - 1] ? 4 : 0;
+                const center = caData[x] ? 2 : 0;
+                const right = caData[x === CA_W - 1 ? 0 : x + 1] ? 1 : 0;
+                
+                // Don't overwrite if it was just injected by the ball/mic
+                if (caData[x] !== 1) {
+                    caData[x] = (activeRule & (1 << (left + center + right))) ? 1 : 0;
                 }
             }
 
             const imgData = rCtx.createImageData(CA_W, CA_H);
-            const basePhase = gameState.dimension * 50 + frameCount * 3;
+            const basePhase = frameCount * 0.05;
 
             for (let y = 0; y < CA_H; y++) {
-                const r = Math.sin((basePhase + y * 4) * 0.05) * 127 + 128;
-                const g = Math.sin((basePhase + y * 4 + 120) * 0.05) * 127 + 128;
-                const b = Math.sin((basePhase + y * 4 + 240) * 0.05) * 127 + 128;
+                const r = Math.sin((basePhase + y * 0.1)) * 127 + 128;
+                const g = Math.sin((basePhase + y * 0.1 + 2)) * 127 + 128;
+                const b = Math.sin((basePhase + y * 0.1 + 4)) * 127 + 128;
 
                 for (let x = 0; x < CA_W; x++) {
                     const i = y * CA_W + x;
@@ -426,121 +493,92 @@
                     if (caData[i] > 0) {
                         imgData.data[idx] = r; imgData.data[idx+1] = g; imgData.data[idx+2] = b; imgData.data[idx+3] = 255;
                     } else {
-                        imgData.data[idx] = 0; imgData.data[idx+1] = 5; imgData.data[idx+2] = 10; imgData.data[idx+3] = 255;
+                        imgData.data[idx] = 10; imgData.data[idx+1] = 0; imgData.data[idx+2] = 20; imgData.data[idx+3] = 255;
                     }                   
                 }
             }
             rCtx.putImageData(imgData, 0, 0);
         }
 
-        function updateBoardCA() {
+        function updateBoardRuliad() {
             for(let i = 0; i < trailData.length; i++) {
-                if(trailData[i] > 0) trailData[i] = Math.max(0, trailData[i] - 3);
-            }
-
-            for (let y = 0; y < B_CA_SIZE; y++) {
-                for (let x = 0; x < B_CA_SIZE; x++) {
-                    const i = y * B_CA_SIZE + x;
-                    let n = 0;
-                    
-                    if (y > 0 && bData[i - B_CA_SIZE] > 128) n++;
-                    if (y < B_CA_SIZE - 1 && bData[i + B_CA_SIZE] > 128) n++;
-                    if (x > 0 && bData[i - 1] > 128) n++;
-                    if (x < B_CA_SIZE - 1 && bData[i + 1] > 128) n++;
-
-                    if (n % 2 !== 0 && n > 0) {
-                        bDataNext[i] = 255; 
-                    } else {
-                        bDataNext[i] = Math.max(0, bData[i] - 15); 
-                    }
-                }
+                if(trailData[i] > 0) trailData[i] = Math.max(0, trailData[i] - 2);
             }
 
             const imgData = bCtx.createImageData(B_CA_SIZE, B_CA_SIZE);
-            for (let i = 0; i < B_CA_SIZE * B_CA_SIZE; i++) {
-                bData[i] = bDataNext[i]; 
-                
-                let r = colBoardBg[0], g = colBoardBg[1], b = colBoardBg[2];
+            const t = Math.floor(frameCount / 4);
 
-                if (bData[i] > 128) {
-                    r = colBoardCA[0]; g = colBoardCA[1]; b = colBoardCA[2];
+            for (let y = 0; y < B_CA_SIZE; y++) {
+                for (let x = 0; x < B_CA_SIZE; x++) {
+                    const cx = x - B_CA_SIZE/2;
+                    const cy = y - B_CA_SIZE/2;
+                    
+                    let val = 0;
+                    if (currentRule === 0) val = (cx ^ cy) - t;          
+                    else if (currentRule === 1) val = (cx * cy) + t;     
+                    else if (currentRule === 2) val = (cx | cy) - t;     
+                    else val = Math.floor(Math.sqrt(cx*cx + cy*cy)) - t; 
+                    
+                    val = Math.abs(val + trailData[y * B_CA_SIZE + x]);
+                    
+                    const colorIndex = val % 4;
+                    const c = currentPalette[colorIndex];
+                    
+                    let r = c[0], g = c[1], b = c[2];
+                    if (trailData[y * B_CA_SIZE + x] > 200) {
+                        r = 255; g = 255; b = 0; 
+                    } else if (trailData[y * B_CA_SIZE + x] > 50) {
+                        r = 255; g = 0; b = 150; 
+                    }
+
+                    const idx = (y * B_CA_SIZE + x) * 4;
+                    imgData.data[idx] = r;
+                    imgData.data[idx+1] = g;
+                    imgData.data[idx+2] = b;
+                    imgData.data[idx+3] = 255;
                 }
-
-                if (trailData[i] > 0) {
-                    let t = trailData[i] / 255; 
-                    let targetCol = trailData[i] > 180 ? colVoice : colTrail;
-                    r = r * (1-t) + targetCol[0] * t;
-                    g = g * (1-t) + targetCol[1] * t;
-                    b = b * (1-t) + targetCol[2] * t;
-                }
-
-                const idx = i * 4;
-                imgData.data[idx] = Math.floor(r);
-                imgData.data[idx+1] = Math.floor(g);
-                imgData.data[idx+2] = Math.floor(b);
-                imgData.data[idx+3] = 255;
             }
             bCtx.putImageData(imgData, 0, 0);
         }
 
-        function traceBoardPath(ctx) {
-            ctx.beginPath();
-            ctx.moveTo(boardPoly.vertices[0].x, boardPoly.vertices[0].y);
-            for(let i=1; i<boardPoly.sides; i++) {
-                ctx.lineTo(boardPoly.vertices[i].x, boardPoly.vertices[i].y);
-            }
-            ctx.closePath();
-        }
-
         function drawBoard() {
             ctx.save();
-            traceBoardPath(ctx);
-            ctx.clip(); // Mask CA render to Polygon
+            drawShapePath(ctx, boardShape);
+            ctx.clip(); 
 
             ctx.imageSmoothingEnabled = false;
             ctx.drawImage(boardCanvas, boardRect.x, boardRect.y, boardRect.size, boardRect.size);
             ctx.restore();
 
-            // Polygon Boundary Stroke
-            ctx.strokeStyle = '#444';
+            ctx.strokeStyle = '#fff';
             ctx.lineWidth = 4;
-            traceBoardPath(ctx);
+            drawShapePath(ctx, boardShape);
             ctx.stroke();
 
-            // Draw Pockets at Vertices
             ctx.fillStyle = '#000';
             ctx.strokeStyle = '#fff';
-            ctx.lineWidth = 2;
+            ctx.lineWidth = 3;
             
-            boardPoly.vertices.forEach(v => {
+            boardShape.pockets.forEach(p => {
                 ctx.beginPath();
-                ctx.arc(v.x, v.y, POCKET_RADIUS, 0, Math.PI * 2);
+                ctx.arc(p.x, p.y, POCKET_RADIUS, 0, Math.PI * 2);
                 ctx.fill();
                 ctx.stroke();
             });
         }
 
-        function drawDynamicMunkerWhite() {
+        function drawThickMunkerWhite() {
             ctx.save();
-            traceBoardPath(ctx);
+            drawShapePath(ctx, boardShape);
             ctx.clip(); 
             
-            // Thin lines maximize assimilation illusion
-            const stripeH = 3; 
-            
-            // Endlessly drifting complementary colors
-            baseMunkerHue = (baseMunkerHue + 0.15) % 360;
-            const h1 = baseMunkerHue;
-            const h2 = (baseMunkerHue + 180) % 360; // Perfect mathematical complementary
-            
-            const color1 = `hsla(${h1}, 100%, 50%, 0.8)`;
-            const color2 = `hsla(${h2}, 100%, 50%, 0.8)`;
+            const stripeH = 5; 
             
             for (let y = boardRect.y; y < boardRect.y + boardRect.size; y += stripeH * 4) {
-                ctx.fillStyle = color1; 
+                ctx.fillStyle = currentMunkerPair[0]; 
                 ctx.fillRect(boardRect.x, y, boardRect.size, stripeH);
                 
-                ctx.fillStyle = color2;
+                ctx.fillStyle = currentMunkerPair[1];
                 ctx.fillRect(boardRect.x, y + stripeH * 2, boardRect.size, stripeH);
             }
             ctx.restore();
@@ -554,16 +592,10 @@
                 let sum = 0;
                 for(let i=0; i<dataArray.length; i++) sum += dataArray[i];
                 currentAudioLevel = sum / dataArray.length;
-
-                // Only generate visual shockwaves if we are actively playing
-                if (gameState.state === 'PLAYING' && currentAudioLevel > 40 && frameCount % 8 === 0) {
-                    shockwaves.push({ r: POCKET_RADIUS, force: currentAudioLevel, color: `rgb(${colVoice.join(',')})` });
-                }
             }
 
             if (frameCount % 4 === 0) updateBackgroundRuliad();
             
-            // === RENDER ROUTINE ===
             ctx.fillStyle = '#000';
             ctx.fillRect(0, 0, WIDTH, HEIGHT);
 
@@ -572,19 +604,18 @@
                 ctx.drawImage(ruliadCanvas, 0, 0, WIDTH, HEIGHT);
             }
 
-            // === TRANSITION PHASE (THE VOID) ===
             if (gameState.state === 'TRANSITION') {
                 gameState.transitionTimer--;
                 
-                // Draw text during transition
-                ctx.fillStyle = `hsl(${(frameCount * 5) % 360}, 100%, 50%)`;
-                ctx.font = '24px "Press Start 2P"';
+                ctx.fillStyle = `hsl(${(frameCount * 10) % 360}, 100%, 50%)`;
+                ctx.font = '30px "Press Start 2P"';
                 ctx.textAlign = 'center';
-                ctx.fillText("VOID REACHED", WIDTH/2, HEIGHT/2 - 20);
+                ctx.fillText("DIMENSION", WIDTH/2, HEIGHT/2 - 20);
+                ctx.fillText("SHIFT", WIDTH/2, HEIGHT/2 + 20);
                 
                 ctx.fillStyle = '#fff';
                 ctx.font = '12px "Press Start 2P"';
-                ctx.fillText(`BOUNCES: ${gameState.bounces}`, WIDTH/2, HEIGHT/2 + 20);
+                ctx.fillText(`BOUNCES SURVIVED: ${gameState.bounces}`, WIDTH/2, HEIGHT/2 + 60);
 
                 if (gameState.transitionTimer <= 0) {
                     gameState.state = 'PLAYING';
@@ -594,41 +625,23 @@
                 }
                 
                 requestAnimationFrame(loop);
-                return; // Skip rendering board/ball logic
+                return; 
             }
 
-            // === PLAYING PHASE ===
-            updateBoardCA();
-
-            // Draw Polygon Board
+            updateBoardRuliad();
             drawBoard();
 
-            // Sonic Shockwaves
-            for (let i = shockwaves.length - 1; i >= 0; i--) {
-                let sw = shockwaves[i];
-                sw.r += sw.force * 0.15; 
-                ctx.strokeStyle = sw.color;
-                ctx.globalAlpha = Math.max(0, 1 - sw.r/(boardPoly.r * 1.5));
-                ctx.lineWidth = 5;
-                ctx.beginPath(); ctx.arc(boardPoly.cx, boardPoly.cy, sw.r, 0, Math.PI*2); ctx.stroke();
-                ctx.globalAlpha = 1;
-                if (sw.r > boardPoly.r * 2) shockwaves.splice(i, 1);
-            }
-
-            // Single Ball Update & Draw
             if (playerBall) {
                 playerBall.update();
                 playerBall.draw(ctx);
             }
 
-            // Munker-White Harmonics
-            drawDynamicMunkerWhite();
+            drawThickMunkerWhite();
 
             requestAnimationFrame(loop);
         }
 
-        // Init
-        generateGeometry(4); // Start with square
+        generateGeometry(); 
         resize();
         initBall();
         loop();
