@@ -39,6 +39,7 @@
             max-width: 1000px;
             display: flex;
             justify-content: space-between;
+            align-items: center;
             font-size: 10px;
             text-shadow: 3px 3px 0 #000, -1px -1px 0 #000;
             color: #0ff;
@@ -47,12 +48,22 @@
             padding: 10px;
             border: 2px solid #0ff;
             flex-wrap: wrap;
-            gap: 5px;
+            gap: 10px;
         }
 
         .hud span { flex: 1; text-align: center; white-space: nowrap; }
         .hud-highlight { color: #f0f; }
         .hud-mic { color: #ff0; cursor: pointer; }
+
+        .target-container {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            background: rgba(255,255,255,0.1);
+            padding: 4px 10px;
+            border-radius: 4px;
+            border: 1px solid #0ff;
+        }
 
         .scanlines {
             position: absolute;
@@ -86,9 +97,12 @@
     <div class="hud" id="ui-panel">
         <span>DIM: <span id="ui-dim" class="hud-highlight">1</span></span>
         <span>BOUNCES: <span id="ui-winding" class="hud-highlight">0</span></span>
-        <span class="hidden md:inline">PRECISION: <span id="ui-precision" class="hud-highlight">0.0000</span></span>
         <span class="hidden md:inline">HARMONIC: <span id="ui-harmonic" class="hud-highlight">0.0</span></span>
         <span>BEST: <span id="ui-best" class="hud-highlight">0</span></span>
+        <div class="target-container">
+            <span>SINK TARGET:</span>
+            <canvas id="targetCanvas" width="30" height="30"></canvas>
+        </div>
         <span id="ui-mic" class="hud-mic">[CLICK FOR AUDIO]</span>
     </div>
     
@@ -99,12 +113,15 @@
     <script>
         const canvas = document.getElementById('gameCanvas');
         const ctx = canvas.getContext('2d');
+        const targetCanvas = document.getElementById('targetCanvas');
+        const tCtx = targetCanvas.getContext('2d');
         
         // --- BACKGROUND RULIAD SETUP ---
         const ruliadCanvas = document.createElement('canvas');
         const rCtx = ruliadCanvas.getContext('2d');
         const CA_PIXEL = 8;
         let CA_W = 1, CA_H = 1, caData;
+        let bgRowColors = new Uint8Array(0); 
         
         // --- BOARD RULIAD (POOL TABLE) SETUP ---
         const boardCanvas = document.createElement('canvas');
@@ -125,7 +142,7 @@
             [[255,50,0], [0,255,200], [200,0,255], [255,255,0]]
         ];
         let currentPalette = palettes[0];
-        let bgPaletteShift = 0; // Cycles on wall bounce
+        let bgPaletteShift = 0; 
         
         // Harmonic Munker-White Pairs
         const munkerPairs = [
@@ -135,6 +152,7 @@
             ['#FF0000', '#0000FF']  // Red / Blue
         ];
         let currentMunkerPair = munkerPairs[0];
+        let targetMunkerIndex = 0; // Defines which illusion color the target grey ball receives
         
         let WIDTH = window.innerWidth || 800;
         let HEIGHT = window.innerHeight || 600;
@@ -144,7 +162,7 @@
         let boardRect = { x: 0, y: 0, size: 0 };
         
         let currentRule = 0; 
-        let bgRule = 30; // The unique background 1D rule
+        let bgRule = 30; 
         let frameCount = 0;
 
         let gameState = {
@@ -153,7 +171,9 @@
             best: 0,
             state: 'PLAYING', 
             transitionTimer: 0,
-            sinkHole: {x: 0, y: 0} 
+            transitionType: 'NEXT', // 'NEXT' or 'GAMEOVER'
+            sinkHole: {x: 0, y: 0},
+            sinkingBall: null
         };
 
         // --- AUDIO ENGINE ---
@@ -161,7 +181,7 @@
         let micEnabled = false;
         let currentAudioLevel = 0;
         let harmonicSpectrum = 0;
-        let sustainedHarmonic = 0; // For triggering resonance jumps
+        let sustainedHarmonic = 0;
 
         async function initAudio() {
             if (micEnabled) return;
@@ -311,18 +331,47 @@
             ruliadCanvas.width = CA_W;
             ruliadCanvas.height = CA_H;
             caData = new Uint8Array(CA_W * CA_H);
+            bgRowColors = new Uint8Array(CA_H);
+            
             caData[Math.floor(CA_W / 2)] = 1;
 
             generateGeometry();
         }
 
-        window.addEventListener('resize', () => { resize(); initBall(); });
+        window.addEventListener('resize', () => { resize(); initBalls(); });
+
+        // --- TARGET HUD RENDERING ---
+        function updateTargetHUD() {
+            tCtx.clearRect(0, 0, 30, 30);
+            
+            // Draw Target Grey Ball Base
+            tCtx.fillStyle = '#888888';
+            tCtx.beginPath(); tCtx.arc(15, 15, 12, 0, Math.PI * 2); tCtx.fill();
+            tCtx.fillStyle = '#fff';
+            tCtx.beginPath(); tCtx.arc(15, 15, 6, 0, Math.PI * 2); tCtx.fill();
+            tCtx.fillStyle = '#000';
+            tCtx.beginPath(); tCtx.arc(15, 15, 2, 0, Math.PI * 2); tCtx.fill();
+
+            // Draw specific Munker-White stripes to replicate the illusion!
+            // We use targetMunkerIndex to decide which color overlaps the center
+            const c1 = currentMunkerPair[targetMunkerIndex];
+            const c2 = currentMunkerPair[1 - targetMunkerIndex];
+            
+            tCtx.fillStyle = c1;
+            tCtx.fillRect(0, 3, 30, 4);
+            tCtx.fillRect(0, 23, 30, 4);
+            
+            tCtx.fillStyle = c2;
+            tCtx.fillRect(0, 13, 30, 4);
+        }
 
         // --- GAME LOGIC ---
-        function triggerTransition(holePoint) {
+        function triggerTransition(holePoint, type, ballRef) {
             gameState.state = 'TRANSITION';
             gameState.transitionTimer = 150; 
             gameState.sinkHole = holePoint;
+            gameState.transitionType = type;
+            gameState.sinkingBall = ballRef;
             
             if (gameState.bounces > gameState.best) {
                 gameState.best = gameState.bounces;
@@ -330,15 +379,23 @@
                 if (uiBest) uiBest.innerText = gameState.best;
             }
             currentAudioLevel = 90; 
-            sustainedHarmonic = 0; // Reset resonance overload
+            sustainedHarmonic = 0; 
         }
 
-        function nextDimension() {
-            gameState.dimension++;
+        function restartGame() {
+            gameState.dimension = 1;
+            gameState.bounces = 0;
+            const uiWinding = document.getElementById('ui-winding');
+            if (uiWinding) uiWinding.innerText = "0";
+            nextDimension(true); // True forces reset
+        }
+
+        function nextDimension(isReset = false) {
+            if (!isReset) gameState.dimension++;
             
             const uiPanel = document.getElementById('ui-panel');
             if (uiPanel) {
-                uiPanel.style.borderColor = '#f0f';
+                uiPanel.style.borderColor = isReset ? '#f00' : '#f0f';
                 setTimeout(() => uiPanel.style.borderColor = '#0ff', 300);
             }
 
@@ -349,33 +406,43 @@
 
             currentRule = (currentRule + 1) % 8; 
             
-            // Randomize the 1D background rule for truly unique voids
             const interestingRules = [30, 90, 110, 150, 105, 73, 22, 126, 45, 169];
             bgRule = interestingRules[Math.floor(Math.random() * interestingRules.length)];
 
             currentPalette = palettes[gameState.dimension % palettes.length];
             currentMunkerPair = munkerPairs[gameState.dimension % munkerPairs.length];
 
+            // Randomize which stripe color is assigned to the Target Grey Ball
+            targetMunkerIndex = Math.random() > 0.5 ? 0 : 1;
+            updateTargetHUD();
+
             caData.fill(0);
             trailData.fill(0);
             bData.fill(0);
+            bgRowColors.fill(bgPaletteShift);
+            
             if (caData.length > 0) caData[Math.floor(CA_W / 2)] = 1;
 
-            initBall();
+            initBalls();
         }
 
-        // --- PHYSICS & BALL ---
+        // --- PHYSICS & BALLS ---
         const POCKET_RADIUS = 28; 
 
         class Ball {
-            constructor(x, y, vx, vy, radius) {
+            constructor(x, y, vx, vy, radius, type, trueColor) {
                 this.x = x; this.y = y; this.vx = vx; this.vy = vy; this.radius = radius;
-                this.lastBounce = 0;
+                this.type = type; // 'WHITE', 'BLACK', 'TARGET', 'DECOY'
+                this.trueColor = trueColor; 
                 this.angle = 0; 
-                this.trueColor = '#ffffff'; 
+                this.isSinking = false; 
+                this.targetPocket = null;
             }
 
             update() {
+                if (this.isSinking) return; // Physics handled separately below
+
+                // Sonic Drive Impulse pushes ALL balls
                 if (micEnabled && currentAudioLevel > 20) {
                     const dx = this.x - boardShape.cx;
                     const dy = this.y - boardShape.cy;
@@ -385,153 +452,14 @@
                     this.vy += (dy / dist) * force;
                 }
 
+                // Drag/Friction to eventually slow them down naturally
+                this.vx *= 0.998;
+                this.vy *= 0.998;
+
                 const speed = Math.hypot(this.vx, this.vy);
                 if (speed > 10) { 
                     this.vx = (this.vx / speed) * 10;
                     this.vy = (this.vy / speed) * 10;
-                }
-
-                // Continuous Collision Detection Sub-stepping
-                const subSteps = 2; 
-                const dt = 1 / subSteps;
-                let hitWallThisFrame = false;
-                let minSubDistToPocket = Infinity;
-                let disableWallCollisionThisFrame = false;
-                let frameBounced = false; // Used to trigger visual effects
-
-                for (let step = 0; step < subSteps; step++) {
-                    
-                    // POCKET SINK & GRAVITY LOGIC
-                    for (let p of boardShape.pockets) {
-                        let dx = p.x - this.x;
-                        let dy = p.y - this.y;
-                        let dist = Math.hypot(dx, dy);
-                        
-                        let pullRadius = POCKET_RADIUS * 2.5; 
-                        if (dist < pullRadius && dist > 0) {
-                            let gravity = 1.0 * (1 - dist / pullRadius) * dt; 
-                            this.vx += (dx / dist) * gravity;
-                            this.vy += (dy / dist) * gravity;
-                        }
-
-                        if (dist < POCKET_RADIUS * 1.6) {
-                            disableWallCollisionThisFrame = true;
-                        }
-
-                        if (dist < POCKET_RADIUS * 1.2) {
-                            triggerTransition(p); 
-                            return; 
-                        }
-                    }
-
-                    this.x += this.vx * dt; 
-                    this.y += this.vy * dt;
-                    this.angle += speed * 0.05 * dt;
-
-                    // Write to Board CA
-                    const caX = Math.floor(((this.x - boardRect.x) / boardRect.size) * B_CA_SIZE);
-                    const caY = Math.floor(((this.y - boardRect.y) / boardRect.size) * B_CA_SIZE);
-                    
-                    let brushRadius = 1;
-                    let injectionHeat = 120; 
-                    if (micEnabled && currentAudioLevel > 15) {
-                        brushRadius = Math.max(2, Math.floor(currentAudioLevel / 12));
-                        injectionHeat = 255; 
-                    }
-                    
-                    for(let dy = -brushRadius; dy <= brushRadius; dy++) {
-                        for(let dx = -brushRadius; dx <= brushRadius; dx++) {
-                            if(dx*dx + dy*dy <= brushRadius*brushRadius) {
-                                const nx = caX + dx, ny = caY + dy;
-                                if(nx >= 0 && nx < B_CA_SIZE && ny >= 0 && ny < B_CA_SIZE) {
-                                    trailData[ny * B_CA_SIZE + nx] = injectionHeat;
-                                }
-                            }
-                        }
-                    }
-
-                    // STRICT BULLETPROOF COLLISION (Ignored if falling into a hole)
-                    if (!disableWallCollisionThisFrame) {
-                        let overlapOffset = {x: 0, y: 0};
-                        
-                        for(let i=0; i<boardShape.vertices.length; i++) {
-                            let A = boardShape.vertices[i];
-                            let B = boardShape.vertices[(i+1)%boardShape.vertices.length];
-                            
-                            let dx = B.x - A.x;
-                            let dy = B.y - A.y;
-                            let len2 = dx*dx + dy*dy;
-                            if(len2 === 0) continue;
-
-                            let tLine = ((this.x - A.x) * dx + (this.y - A.y) * dy) / len2;
-                            tLine = Math.max(0, Math.min(1, tLine)); 
-
-                            let closestX = A.x + tLine * dx;
-                            let closestY = A.y + tLine * dy;
-
-                            let distX = this.x - closestX;
-                            let distY = this.y - closestY;
-                            let dist = Math.hypot(distX, distY);
-
-                            if (dist < this.radius && dist > 0.01) {
-                                let nx = distX / dist;
-                                let ny = distY / dist;
-
-                                let overlap = this.radius - dist;
-                                overlapOffset.x += nx * overlap;
-                                overlapOffset.y += ny * overlap;
-
-                                let dot = this.vx * nx + this.vy * ny;
-                                if (dot < 0) {
-                                    this.vx -= 2 * dot * nx;
-                                    this.vy -= 2 * dot * ny;
-                                    hitWallThisFrame = true;
-                                    frameBounced = true;
-                                }
-                            }
-                        }
-
-                        this.x += overlapOffset.x;
-                        this.y += overlapOffset.y;
-
-                        // Emergency Pull-back
-                        let dCenter = Math.hypot(this.x - boardShape.cx, this.y - boardShape.cy);
-                        if (dCenter > boardShape.r + this.radius) {
-                            let pX = boardShape.cx - this.x, pY = boardShape.cy - this.y;
-                            let pLen = Math.hypot(pX, pY);
-                            this.x += (pX / pLen) * 5;
-                            this.y += (pY / pLen) * 5;
-                        }
-                    }
-                    
-                    if (hitWallThisFrame) {
-                        for(let p of boardShape.pockets) {
-                            let dToP = Math.hypot(this.x - p.x, this.y - p.y);
-                            if (dToP < minSubDistToPocket) minSubDistToPocket = dToP;
-                        }
-                    }
-                }
-
-                // Bounce triggers Background Palette Shift
-                if (frameBounced) {
-                    bgPaletteShift = (bgPaletteShift + 1) % 4;
-                }
-
-                // PRECISION MATH
-                if (hitWallThisFrame) {
-                    const detectionRadius = 80; 
-                    if (minSubDistToPocket < detectionRadius && frameCount - this.lastBounce > 5) {
-                        gameState.bounces++;
-                        const calcPrecision = 1 - (minSubDistToPocket / detectionRadius);
-                        
-                        const uiPrecision = document.getElementById('ui-precision');
-                        if (uiPrecision) uiPrecision.innerText = calcPrecision.toFixed(4);
-                        
-                        this.lastBounce = frameCount;
-                        
-                        const uiWinding = document.getElementById('ui-winding');
-                        if (uiWinding) uiWinding.innerText = gameState.bounces;
-                    }
                 }
             }
 
@@ -547,46 +475,69 @@
                 ctx.fillStyle = this.trueColor;
                 ctx.beginPath(); ctx.arc(0, 0, this.radius, 0, Math.PI * 2); ctx.fill();
 
-                ctx.fillStyle = '#aaa';
-                ctx.beginPath(); ctx.arc(this.radius*0.2, 0, this.radius * 0.5, 0, Math.PI * 2); ctx.fill();
-                ctx.fillStyle = '#000';
-                ctx.beginPath(); ctx.arc(this.radius*0.2, 0, this.radius * 0.2, 0, Math.PI * 2); ctx.fill();
+                // Ball Center details
+                if (this.type === 'BLACK') {
+                    ctx.fillStyle = '#fff';
+                    ctx.beginPath(); ctx.arc(this.radius*0.2, 0, this.radius * 0.5, 0, Math.PI * 2); ctx.fill();
+                    ctx.fillStyle = '#000';
+                    ctx.beginPath(); ctx.arc(this.radius*0.2, 0, this.radius * 0.2, 0, Math.PI * 2); ctx.fill();
+                } else if (this.type === 'WHITE') {
+                    ctx.fillStyle = '#eee';
+                    ctx.beginPath(); ctx.arc(this.radius*0.2, 0, this.radius * 0.5, 0, Math.PI * 2); ctx.fill();
+                    ctx.fillStyle = '#ccc';
+                    ctx.beginPath(); ctx.arc(this.radius*0.2, 0, this.radius * 0.2, 0, Math.PI * 2); ctx.fill();
+                } else {
+                    // Grey Target/Decoys
+                    ctx.fillStyle = '#fff';
+                    ctx.beginPath(); ctx.arc(this.radius*0.2, 0, this.radius * 0.5, 0, Math.PI * 2); ctx.fill();
+                    ctx.fillStyle = '#000';
+                    ctx.beginPath(); ctx.arc(this.radius*0.2, 0, this.radius * 0.2, 0, Math.PI * 2); ctx.fill();
+                }
 
                 ctx.restore();
             }
         }
 
-        let playerBall;
-        function initBall() {
-            playerBall = new Ball(boardShape.cx - 20, boardShape.cy - 20, 3.5, 2.8, 16);
+        let balls = [];
+        function initBalls() {
+            // Spawn 4 balls near center, slight random scatter
+            balls = [
+                new Ball(boardShape.cx - 25, boardShape.cy - 25, -2, -2, 14, 'WHITE', '#ffffff'),
+                new Ball(boardShape.cx + 25, boardShape.cy + 25, 2, 2, 14, 'BLACK', '#222222'),
+                new Ball(boardShape.cx + 25, boardShape.cy - 25, 2, -2, 14, 'TARGET', '#888888'),
+                new Ball(boardShape.cx - 25, boardShape.cy + 25, -2, 2, 14, 'DECOY', '#888888')
+            ];
+            updateTargetHUD();
         }
 
         // --- RENDERING ---
         function updateBackgroundRuliad() {
             if (CA_W <= 0 || CA_H <= 0) return;
 
+            // Shift grid downwards
             for (let y = CA_H - 1; y > 0; y--) {
                 for (let x = 0; x < CA_W; x++) {
                     caData[y * CA_W + x] = caData[(y - 1) * CA_W + x];
                 }
+                bgRowColors[y] = bgRowColors[y - 1]; 
             }
             
+            bgRowColors[0] = bgPaletteShift;
             let activeRule = bgRule; 
             
-            if (playerBall && gameState.state === 'PLAYING') {
-                let ballCaX = Math.floor((playerBall.x / WIDTH) * CA_W);
-                if (ballCaX >= 0 && ballCaX < CA_W) {
-                    caData[ballCaX] = 1; 
-                    caData[Math.max(0, ballCaX - 1)] = 1; 
-                    caData[Math.min(CA_W - 1, ballCaX + 1)] = 1;
-                }
+            if (gameState.state === 'PLAYING') {
+                balls.forEach(b => {
+                    let ballCaX = Math.floor((b.x / WIDTH) * CA_W);
+                    if (ballCaX >= 0 && ballCaX < CA_W) {
+                        caData[ballCaX] = 1; 
+                        caData[Math.max(0, ballCaX - 1)] = 1; 
+                        caData[Math.min(CA_W - 1, ballCaX + 1)] = 1;
+                    }
+                });
             }
 
-            // Audio actively mutates the rule via Harmonic Spectrum
             if (micEnabled && currentAudioLevel > 15) {
-                // Dominant harmonic spectrum controls the mathematical background rules
                 activeRule = Math.floor(harmonicSpectrum * 2.55) ^ (frameCount % 255);
-                
                 const step = Math.max(1, Math.floor((dataArray.length / 2) / CA_W));
                 for (let x = 0; x < CA_W; x++) {
                     if (dataArray[x * step] > 80) caData[x] = 1;
@@ -604,12 +555,12 @@
             }
 
             const imgData = rCtx.createImageData(CA_W, CA_H);
-            
-            // Background color is pulled from the dimensional palette and shifted by WALL BOUNCES
-            const bgCol = currentPalette[(0 + bgPaletteShift) % 4];
-            const fgCol = currentPalette[(2 + bgPaletteShift) % 4]; 
 
             for (let y = 0; y < CA_H; y++) {
+                let rowShift = bgRowColors[y] || 0;
+                const bgCol = currentPalette[(0 + rowShift) % 4];
+                const fgCol = currentPalette[(2 + rowShift) % 4]; 
+
                 for (let x = 0; x < CA_W; x++) {
                     const i = y * CA_W + x;
                     const idx = i * 4;
@@ -631,7 +582,7 @@
 
         function updateBoardRuliad() {
             for(let i = 0; i < trailData.length; i++) {
-                if(trailData[i] > 0) trailData[i] = Math.max(0, trailData[i] - 2);
+                if(trailData[i] > 0) trailData[i] = Math.max(0, trailData[i] - 3);
             }
 
             if (micEnabled && currentAudioLevel > 20) {
@@ -672,7 +623,6 @@
                     let avg = nSum / nCount;
 
                     let vMath = 0;
-                    // Inject the harmonic spectrum ratio directly into the rule modification map
                     const ruleMod = (currentRule + Math.floor(harmonicSpectrum / 10)) % 8;
                     
                     if (ruleMod === 0) vMath = (cx * dimMod) ^ (cy * dimMod);                           
@@ -707,7 +657,6 @@
                 }
             }
             for (let i = 0; i < B_CA_SIZE * B_CA_SIZE; i++) bData[i] = bDataNext[i];
-            
             bCtx.putImageData(imgData, 0, 0);
         }
 
@@ -724,17 +673,6 @@
             ctx.lineWidth = 4;
             drawShapePath(ctx, boardShape, true); 
             ctx.stroke();
-
-            ctx.fillStyle = '#000';
-            ctx.strokeStyle = '#fff';
-            ctx.lineWidth = 3;
-            
-            boardShape.pockets.forEach(p => {
-                ctx.beginPath();
-                ctx.arc(p.x, p.y, POCKET_RADIUS, 0, Math.PI * 2);
-                ctx.fill();
-                ctx.stroke();
-            });
         }
 
         function drawThickMunkerWhite() {
@@ -754,35 +692,66 @@
             ctx.restore();
         }
 
+        function drawPockets() {
+            boardShape.pockets.forEach((p, index) => {
+                ctx.save();
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, POCKET_RADIUS, 0, Math.PI * 2);
+                ctx.clip();
+                ctx.fillStyle = '#000';
+                ctx.fill();
+
+                if (ruliadCanvas.width > 0 && ruliadCanvas.height > 0) {
+                    ctx.translate(p.x, p.y);
+                    ctx.rotate((frameCount * 0.005) + (index * Math.PI / 4));
+                    ctx.scale(0.4, 0.4); 
+                    ctx.translate(-WIDTH/2, -HEIGHT/2);
+                    ctx.drawImage(ruliadCanvas, 0, 0, WIDTH, HEIGHT);
+                }
+                ctx.restore();
+
+                ctx.save();
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, POCKET_RADIUS, 0, Math.PI * 2);
+                ctx.clip();
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, POCKET_RADIUS + 2, 0, Math.PI * 2);
+                ctx.lineWidth = 6;
+                ctx.strokeStyle = '#000';
+                ctx.shadowColor = '#000';
+                ctx.shadowBlur = 10;
+                ctx.stroke();
+                ctx.restore();
+
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, POCKET_RADIUS, 0, Math.PI * 2);
+                const fgCol = currentPalette[(2 + bgPaletteShift) % 4];
+                ctx.strokeStyle = `rgba(${fgCol[0]}, ${fgCol[1]}, ${fgCol[2]}, 0.8)`;
+                ctx.lineWidth = 3;
+                ctx.stroke();
+            });
+        }
+
+        // --- MAIN LOOP & PHYSICS RESOLUTION ---
         function loop() {
             frameCount++;
 
-            // --- AUDIO & HARMONIC SPECTRUM ANALYSIS ---
             if (micEnabled) {
                 analyser.getByteFrequencyData(dataArray);
-                let sum = 0;
-                let maxAmp = 0;
-                let domBin = 0;
-                
+                let sum = 0, maxAmp = 0, domBin = 0;
                 for(let i=0; i<dataArray.length; i++) {
                     sum += dataArray[i];
-                    if (dataArray[i] > maxAmp) {
-                        maxAmp = dataArray[i];
-                        domBin = i;
-                    }
+                    if (dataArray[i] > maxAmp) { maxAmp = dataArray[i]; domBin = i; }
                 }
-                
                 currentAudioLevel = sum / dataArray.length;
                 harmonicSpectrum = maxAmp > 15 ? (domBin / dataArray.length) * 100 : 0;
-                
                 const uiHarmonic = document.getElementById('ui-harmonic');
                 if (uiHarmonic) uiHarmonic.innerText = harmonicSpectrum.toFixed(1);
 
-                // Dimension Overload: Highly sustained pure harmonic tone forces a dimensional shift!
                 if (maxAmp > 240 && harmonicSpectrum > 0) {
                     sustainedHarmonic++;
                     if (sustainedHarmonic > 150 && gameState.state === 'PLAYING') {
-                        triggerTransition(playerBall ? {x: playerBall.x, y: playerBall.y} : {x: boardShape.cx, y: boardShape.cy});
+                        triggerTransition({x: boardShape.cx, y: boardShape.cy}, 'NEXT', balls[0]);
                     }
                 } else {
                     sustainedHarmonic = Math.max(0, sustainedHarmonic - 2);
@@ -799,12 +768,14 @@
                 ctx.drawImage(ruliadCanvas, 0, 0, WIDTH, HEIGHT);
             }
 
-            // === THE VOID TUNNEL TRANSITION ===
             if (gameState.state === 'TRANSITION') {
                 gameState.transitionTimer--;
                 let prog = 1 - (gameState.transitionTimer / 150); 
                 
-                ctx.fillStyle = `rgba(0,0,0,${Math.min(1, prog * 1.5)})`;
+                let isGameOver = gameState.transitionType === 'GAMEOVER';
+                let transColor = isGameOver ? '0, 0, 0' : '0, 0, 0';
+                
+                ctx.fillStyle = `rgba(${transColor},${Math.min(1, prog * 1.5)})`;
                 ctx.fillRect(0, 0, WIDTH, HEIGHT);
 
                 let cx = gameState.sinkHole.x;
@@ -823,61 +794,213 @@
                     
                     ctx.globalAlpha = Math.max(0, alpha);
                     let cIndex = i % 4;
-                    ctx.strokeStyle = `rgb(${currentPalette[cIndex][0]}, ${currentPalette[cIndex][1]}, ${currentPalette[cIndex][2]})`;
+                    if (isGameOver) {
+                        ctx.strokeStyle = i % 2 === 0 ? '#ff0000' : '#440000';
+                    } else {
+                        ctx.strokeStyle = `rgb(${currentPalette[cIndex][0]}, ${currentPalette[cIndex][1]}, ${currentPalette[cIndex][2]})`;
+                    }
                     ctx.lineWidth = 4 / scale; 
                     drawShapePath(ctx, boardShape, false);
                     ctx.stroke();
                     ctx.restore();
                 }
 
-                if (prog < 0.6) {
+                if (prog < 0.6 && gameState.sinkingBall) {
                     let ballScale = 1 - (prog / 0.6);
                     ctx.save();
                     ctx.translate(cx, cy);
                     ctx.scale(ballScale, ballScale);
-                    ctx.fillStyle = playerBall ? playerBall.trueColor : '#fff';
-                    ctx.beginPath(); ctx.arc(0, 0, POCKET_RADIUS * 0.6, 0, Math.PI * 2); ctx.fill();
+                    gameState.sinkingBall.draw(ctx);
                     ctx.restore();
                 }
                 
-                ctx.fillStyle = '#fff';
+                ctx.fillStyle = isGameOver ? '#ff0000' : '#fff';
                 ctx.font = '24px "Press Start 2P"';
                 ctx.textAlign = 'center';
                 ctx.globalAlpha = Math.min(1, prog * 2);
-                ctx.fillText("DIMENSION SHIFT", WIDTH/2, HEIGHT/2 - 20);
+                ctx.fillText(isGameOver ? "DIMENSION COLLAPSE" : "DIMENSION SHIFT", WIDTH/2, HEIGHT/2 - 20);
+                ctx.fillStyle = '#fff';
                 ctx.font = '10px "Press Start 2P"';
                 ctx.fillText(`SURVIVED: ${gameState.bounces} BOUNCES`, WIDTH/2, HEIGHT/2 + 20);
                 ctx.globalAlpha = 1.0;
 
                 if (gameState.transitionTimer <= 0) {
                     gameState.state = 'PLAYING';
-                    gameState.bounces = 0;
-                    const uiWinding = document.getElementById('ui-winding');
-                    if (uiWinding) uiWinding.innerText = "0";
-                    nextDimension();
+                    if (isGameOver) restartGame();
+                    else {
+                        gameState.bounces = 0;
+                        const uiWinding = document.getElementById('ui-winding');
+                        if (uiWinding) uiWinding.innerText = "0";
+                        nextDimension();
+                    }
                 }
                 
                 requestAnimationFrame(loop);
                 return; 
             }
 
-            // === NORMAL PLAY ===
+            // === NORMAL PLAY: PHYSICS RESOLUTION ===
             updateBoardRuliad();
-            drawBoard();
+            
+            const subSteps = 4;
+            const dt = 1 / subSteps;
+            
+            for (let step = 0; step < subSteps; step++) {
+                // 1. Update ball positions and Wall Collisions
+                balls.forEach(b => {
+                    b.update();
+                    if (b.isSinking) return;
 
-            if (playerBall) {
-                playerBall.update();
-                playerBall.draw(ctx);
+                    let hitWallThisFrame = false;
+                    let overlapOffset = {x: 0, y: 0};
+                    
+                    for(let i=0; i<boardShape.vertices.length; i++) {
+                        let A = boardShape.vertices[i];
+                        let B = boardShape.vertices[(i+1)%boardShape.vertices.length];
+                        
+                        let dx = B.x - A.x; let dy = B.y - A.y;
+                        let len2 = dx*dx + dy*dy;
+                        if(len2 === 0) continue;
+
+                        let tLine = ((b.x - A.x) * dx + (b.y - A.y) * dy) / len2;
+                        tLine = Math.max(0, Math.min(1, tLine)); 
+
+                        let closestX = A.x + tLine * dx;
+                        let closestY = A.y + tLine * dy;
+
+                        let distX = b.x - closestX;
+                        let distY = b.y - closestY;
+                        let dist = Math.hypot(distX, distY);
+
+                        if (dist < b.radius && dist > 0.01) {
+                            let nx = distX / dist; let ny = distY / dist;
+                            let overlap = b.radius - dist;
+                            overlapOffset.x += nx * overlap;
+                            overlapOffset.y += ny * overlap;
+
+                            let dot = b.vx * nx + b.vy * ny;
+                            if (dot < 0) {
+                                b.vx -= 2 * dot * nx;
+                                b.vy -= 2 * dot * ny;
+                                hitWallThisFrame = true;
+                            }
+                        }
+                    }
+
+                    b.x += overlapOffset.x;
+                    b.y += overlapOffset.y;
+
+                    // Emergency Pull-back
+                    let dCenter = Math.hypot(b.x - boardShape.cx, b.y - boardShape.cy);
+                    if (dCenter > boardShape.r + b.radius) {
+                        let pX = boardShape.cx - b.x, pY = boardShape.cy - b.y;
+                        let pLen = Math.hypot(pX, pY);
+                        b.x += (pX / pLen) * 5; b.y += (pY / pLen) * 5;
+                    }
+
+                    if (hitWallThisFrame) {
+                        bgPaletteShift = (bgPaletteShift + 1) % 4;
+                        gameState.bounces++;
+                        document.getElementById('ui-winding').innerText = gameState.bounces;
+                    }
+                });
+
+                // 2. Ball-to-Ball Collisions
+                for (let i = 0; i < balls.length; i++) {
+                    for (let j = i + 1; j < balls.length; j++) {
+                        let b1 = balls[i]; let b2 = balls[j];
+                        if (b1.isSinking || b2.isSinking) continue;
+
+                        let dx = b2.x - b1.x; let dy = b2.y - b1.y;
+                        let dist = Math.hypot(dx, dy);
+                        let minDist = b1.radius + b2.radius;
+
+                        if (dist < minDist && dist > 0) {
+                            let overlap = minDist - dist;
+                            let nx = dx / dist; let ny = dy / dist;
+                            
+                            b1.x -= nx * overlap / 2; b1.y -= ny * overlap / 2;
+                            b2.x += nx * overlap / 2; b2.y += ny * overlap / 2;
+
+                            let kx = b1.vx - b2.vx; let ky = b1.vy - b2.vy;
+                            let p = (nx * kx + ny * ky); // Elastic assuming equal mass
+                            
+                            b1.vx -= p * nx; b1.vy -= p * ny;
+                            b2.vx += p * nx; b2.vy += p * ny;
+                        }
+                    }
+                }
+
+                // 3. Pocket Sinking Logic
+                balls.forEach(b => {
+                    if (b.isSinking) {
+                        let dx = b.targetPocket.x - b.x;
+                        let dy = b.targetPocket.y - b.y;
+                        let dist = Math.hypot(dx, dy);
+
+                        if (dist < POCKET_RADIUS * 0.5) {
+                            if (b.type === 'WHITE') {
+                                // Respawn White Ball safely
+                                b.isSinking = false;
+                                b.x = boardShape.cx;
+                                b.y = boardShape.cy;
+                                b.vx = 0; b.vy = 0;
+                            } else if (b.type === 'TARGET') {
+                                triggerTransition(b.targetPocket, 'NEXT', b); 
+                            } else {
+                                // Black or Decoy sunk!
+                                triggerTransition(b.targetPocket, 'GAMEOVER', b); 
+                            }
+                        } else {
+                            let pull = 25.0 * dt; 
+                            b.vx += (dx / dist) * pull;
+                            b.vy += (dy / dist) * pull;
+                            b.vx *= 0.85; b.vy *= 0.85; 
+                            b.x += b.vx * dt; b.y += b.vy * dt;
+                            b.angle += Math.hypot(b.vx, b.vy) * 0.05 * dt;
+                        }
+                    } else {
+                        // Check if ball falls into pocket gravity
+                        for (let p of boardShape.pockets) {
+                            let dist = Math.hypot(p.x - b.x, p.y - b.y);
+                            let pullRadius = POCKET_RADIUS * 2.5; 
+                            if (dist < pullRadius && dist > POCKET_RADIUS * 1.5) {
+                                let gravity = 1.0 * (1 - dist / pullRadius) * dt; 
+                                b.vx += ((p.x - b.x) / dist) * gravity;
+                                b.vy += ((p.y - b.y) / dist) * gravity;
+                            }
+                            if (dist <= POCKET_RADIUS * 1.5) {
+                                b.isSinking = true;
+                                b.targetPocket = p;
+                                break;
+                            }
+                        }
+                        
+                        // Write Trail to CA (Only non-sinking balls)
+                        const caX = Math.floor(((b.x - boardRect.x) / boardRect.size) * B_CA_SIZE);
+                        const caY = Math.floor(((b.y - boardRect.y) / boardRect.size) * B_CA_SIZE);
+                        let injectionHeat = 120; 
+                        if (micEnabled && currentAudioLevel > 15) injectionHeat = 255; 
+                        if(caX >= 0 && caX < B_CA_SIZE && caY >= 0 && caY < B_CA_SIZE) {
+                            trailData[caY * B_CA_SIZE + caX] = injectionHeat;
+                            if (b.type === 'WHITE') trailData[caY * B_CA_SIZE + Math.max(0, caX-1)] = injectionHeat;
+                        }
+                    }
+                });
             }
 
+            // === DRAW FRAME ===
+            drawBoard();
+            balls.forEach(b => b.draw(ctx));
             drawThickMunkerWhite();
+            drawPockets();
 
             requestAnimationFrame(loop);
         }
 
         generateGeometry(); 
         resize();
-        initBall();
+        initBalls();
         loop();
     </script>
 </body>
