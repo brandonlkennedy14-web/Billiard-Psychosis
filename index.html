@@ -262,39 +262,47 @@
         function generateGeometry() {
             const cx = WIDTH / 2;
             const cy = HEIGHT / 2 + 25; 
-            const R = Math.max(10, Math.min(WIDTH, HEIGHT) * 0.44); 
+            
+            // Radically randomize size per dimension
+            const scaleFactor = 0.30 + Math.random() * 0.18; 
+            const R = Math.max(10, Math.min(WIDTH, HEIGHT) * scaleFactor); 
             
             let verts = [];
             let pockets = [];
             
             const types = ['POLYGON', 'STAR', 'HYPERBOLIC_SQUARE', 'HYPOTROCHOID'];
-            const type = types[gameState.dimension % types.length];
-            const primeMod = (gameState.dimension * 7) % 5; 
+            const type = types[Math.floor(Math.random() * types.length)];
+            
+            // Random global rotation makes every shape feel entirely fresh
+            const rotOffset = Math.random() * Math.PI * 2;
             
             if (type === 'HYPERBOLIC_SQUARE') {
                 const resolution = 200;
-                const sqBaseR = R * 0.65;
+                const sqBaseR = R * (0.45 + Math.random() * 0.3); // Dynamic core size
+                const lobeStrength = R * (0.2 + Math.random() * 0.4); // Dynamic petal length
+                const lobeCount = Math.floor(Math.random() * 4) * 2 + 2; // 2, 4, 6, 8 lobes
+                
                 for(let i=0; i<resolution; i++) {
                     let theta = (i / resolution) * Math.PI * 2;
                     let cosT = Math.abs(Math.cos(theta));
                     let sinT = Math.abs(Math.sin(theta));
                     let rSq = sqBaseR / Math.max(cosT, sinT);
-                    let rLobe = R * 0.6 + R * 0.4 * Math.cos(4 * theta);
+                    let rLobe = R * 0.5 + lobeStrength * Math.cos(lobeCount * theta);
+                    
                     let rFinal = Math.max(rSq, rLobe);
-                    verts.push({ x: cx + rFinal * Math.cos(theta), y: cy + rFinal * Math.sin(theta) });
+                    verts.push({ x: cx + rFinal * Math.cos(theta + rotOffset), y: cy + rFinal * Math.sin(theta + rotOffset) });
                 }
                 for(let i=0; i<4; i++) {
                     let angle = (i * Math.PI / 2) + Math.PI/4;
-                    let px = cx + (sqBaseR / Math.cos(Math.PI/4)) * Math.cos(angle);
-                    let py = cy + (sqBaseR / Math.cos(Math.PI/4)) * Math.sin(angle);
+                    let px = cx + (sqBaseR / Math.cos(Math.PI/4)) * Math.cos(angle + rotOffset);
+                    let py = cy + (sqBaseR / Math.cos(Math.PI/4)) * Math.sin(angle + rotOffset);
                     pockets.push({x: px, y: py});
                 }
             }
             else if (type === 'POLYGON') {
-                let sides = primeMod + 4; 
-                let startAngle = -Math.PI / 2; 
+                let sides = Math.floor(Math.random() * 7) + 3; // 3 to 9 sides
                 for(let i=0; i<sides; i++) {
-                    let angle = startAngle + (i * 2 * Math.PI / sides);
+                    let angle = rotOffset + (i * 2 * Math.PI / sides);
                     let px = cx + R * Math.cos(angle);
                     let py = cy + R * Math.sin(angle);
                     verts.push({ x: px, y: py });
@@ -302,11 +310,11 @@
                 }
             } 
             else if (type === 'STAR') {
-                let sides = (primeMod % 3) + 4; 
-                let startAngle = -Math.PI / 2; 
+                let sides = Math.floor(Math.random() * 6) + 4; // 4 to 9 point star
+                let innerRatio = 0.25 + Math.random() * 0.55; // Highly variable depths
                 for(let i=0; i<sides * 2; i++) {
-                    let r = i % 2 === 0 ? R : R * 0.65; 
-                    let angle = startAngle + (i * Math.PI) / sides;
+                    let r = i % 2 === 0 ? R : R * innerRatio; 
+                    let angle = rotOffset + (i * Math.PI) / sides;
                     let px = cx + r * Math.cos(angle);
                     let py = cy + r * Math.sin(angle);
                     verts.push({ x: px, y: py });
@@ -314,19 +322,24 @@
                 }
             }
             else if (type === 'HYPOTROCHOID') {
-                const numLobes = primeMod + 3; 
+                const numLobes = Math.floor(Math.random() * 7) + 3; // 3 to 9 lobes
                 const resolution = 200;
-                const hr = R * 0.6;
+                const hr = R * (0.4 + Math.random() * 0.35); // 0.4 to 0.75
                 const pr = hr * (numLobes - 1) / numLobes;
-                const d = R * 0.45;
+                const d = R * (0.2 + Math.random() * 0.7); // Insanely variable sweeping loops
                 let maxDist = 0;
                 
                 for(let i=0; i<resolution; i++) {
                     let theta = (i / resolution) * Math.PI * 2 * numLobes;
                     let x = (hr - pr) * Math.cos(theta) + d * Math.cos(((hr - pr) / pr) * theta);
                     let y = (hr - pr) * Math.sin(theta) - d * Math.sin(((hr - pr) / pr) * theta);
-                    verts.push({ x: cx + x, y: cy + y });
-                    let dist = Math.hypot(x, y);
+                    
+                    // Apply offset rotation
+                    let rotX = x * Math.cos(rotOffset) - y * Math.sin(rotOffset);
+                    let rotY = x * Math.sin(rotOffset) + y * Math.cos(rotOffset);
+
+                    verts.push({ x: cx + rotX, y: cy + rotY });
+                    let dist = Math.hypot(rotX, rotY);
                     if (dist > maxDist) maxDist = dist;
                 }
                 
@@ -341,7 +354,8 @@
             }
             
             boardShape = { type, cx, cy, r: R, vertices: verts, pockets: pockets };
-            boardRect = { x: cx - R, y: cy - R, size: R * 2 };
+            // Ensure bounding box covers extreme geometric extensions
+            boardRect = { x: cx - R * 1.8, y: cy - R * 1.8, size: R * 3.6 };
         }
 
         function drawShapePath(ctx, shape, applyAudioDistortion = false) {
@@ -960,7 +974,7 @@
 
                     b.x += overlapOffset.x;
                     b.y += overlapOffset.y;
-
+                    // Emergency Pull-back
                     let dCenter = Math.hypot(b.x - boardShape.cx, b.y - boardShape.cy);
                     if (dCenter > boardShape.r + b.radius) {
                         let pX = boardShape.cx - b.x, pY = boardShape.cy - b.y;
@@ -970,10 +984,10 @@
 
                     if (hitWallThisFrame && frameCount - b.lastBounce > 5) {
                         b.lastBounce = frameCount;
-                        if (b.type === 'WHITE') {
-                            bgPaletteShift = (bgPaletteShift + 1) % 4;
-                            impactRipples.push({x: b.x, y: b.y, r: 0, colorShift: bgPaletteShift});
-                        }
+                        // ANY ball hitting the wall now triggers visual ripples and background color shifts!
+                        bgPaletteShift = (bgPaletteShift + 1) % 4;
+                        impactRipples.push({x: b.x, y: b.y, r: 0, colorShift: bgPaletteShift});
+                        
                         gameState.bounces++;
                         const uiWinding = document.getElementById('ui-winding');
                         if(uiWinding) uiWinding.innerText = gameState.bounces;
