@@ -230,7 +230,8 @@
                 let sides = (primeMod % 3) + 4; 
                 let startAngle = -Math.PI / 2; 
                 for(let i=0; i<sides * 2; i++) {
-                    let r = i % 2 === 0 ? R : R * 0.55; 
+                    // Widen the inner radius so the ball doesn't get wedged
+                    let r = i % 2 === 0 ? R : R * 0.65; 
                     let angle = startAngle + (i * Math.PI) / sides;
                     let px = cx + r * Math.cos(angle);
                     let py = cy + r * Math.sin(angle);
@@ -393,16 +394,16 @@
                         let dy = p.y - this.y;
                         let dist = Math.hypot(dx, dy);
                         
-                        // Much tighter and weaker gravity well
-                        let pullRadius = POCKET_RADIUS * 1.8; 
+                        // Gravity well to pull the ball in once it gets to the tip
+                        let pullRadius = POCKET_RADIUS * 2.0; 
                         if (dist < pullRadius && dist > 0) {
-                            let gravity = 0.5 * (1 - dist / pullRadius) * dt; // Weakened from 1.2 to 0.5
+                            let gravity = 0.8 * (1 - dist / pullRadius) * dt; 
                             this.vx += (dx / dist) * gravity;
                             this.vy += (dy / dist) * gravity;
                         }
 
-                        // Strict Sink Detection: Ball must be mostly inside the hole now
-                        if (dist < POCKET_RADIUS * 0.8) {
+                        // Forgiving Sink Detection: Triggers when the ball overlaps the pocket center
+                        if (dist < POCKET_RADIUS * 1.1) {
                             triggerTransition(p); 
                             return; 
                         }
