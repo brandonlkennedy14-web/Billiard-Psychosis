@@ -352,7 +352,7 @@
         }
 
         // --- PHYSICS & BALL ---
-        const POCKET_RADIUS = 30; 
+        const POCKET_RADIUS = 36; // Increased to cover sharp corners visually
 
         class Ball {
             constructor(x, y, vx, vy, radius) {
@@ -393,15 +393,16 @@
                         let dy = p.y - this.y;
                         let dist = Math.hypot(dx, dy);
                         
-                        // Subtle Gravity well to pull the ball in
-                        let pullRadius = POCKET_RADIUS * 3.5; 
+                        // Stronger Gravity well to pull the ball in from the sharp tips
+                        let pullRadius = POCKET_RADIUS * 4.0; 
                         if (dist < pullRadius && dist > 0) {
-                            let gravity = 4.0 * (1 - dist / pullRadius) * dt; 
+                            let gravity = 8.0 * (1 - dist / pullRadius) * dt; 
                             this.vx += (dx / dist) * gravity;
                             this.vy += (dy / dist) * gravity;
                         }
 
-                        if (dist < POCKET_RADIUS) {
+                        // Forgiving Sink Detection: Triggers before getting wedged
+                        if (dist < POCKET_RADIUS + this.radius * 1.5) {
                             triggerTransition(p); 
                             return; 
                         }
