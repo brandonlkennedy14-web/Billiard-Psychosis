@@ -60,6 +60,23 @@
             pointer-events: none;
             z-index: 5;
         }
+
+        .bmc-link {
+            position: absolute;
+            bottom: 15px;
+            left: 50%;
+            transform: translateX(-50%);
+            color: #f0f;
+            text-decoration: none;
+            font-size: 10px;
+            z-index: 20;
+            text-shadow: 2px 2px 0 #000;
+            transition: color 0.2s;
+        }
+        
+        .bmc-link:hover {
+            color: #0ff;
+        }
     </style>
 </head>
 <body>
@@ -67,12 +84,14 @@
     <div class="hud" id="ui-panel">
         <span>DIM: <span id="ui-dim" class="hud-highlight">1</span></span>
         <span>BOUNCES: <span id="ui-winding" class="hud-highlight">0</span></span>
+        <span class="hidden md:inline">PRECISION: <span id="ui-precision" class="hud-highlight">0.0000</span></span>
         <span>BEST: <span id="ui-best" class="hud-highlight">0</span></span>
         <span id="ui-mic" class="hud-mic">[CLICK FOR AUDIO]</span>
     </div>
     
     <canvas id="gameCanvas"></canvas>
     <div class="scanlines"></div>
+    <a href="https://buymeacoffee.com/brandonkennedy" target="_blank" class="bmc-link">BUYMEACOFFEE.COM/BRANDONKENNEDY</a>
 
     <script>
         const canvas = document.getElementById('gameCanvas');
@@ -143,11 +162,17 @@
                 source.connect(analyser);
                 dataArray = new Uint8Array(analyser.frequencyBinCount);
                 micEnabled = true;
-                document.getElementById('ui-mic').innerText = "SONIC DRIVE: ON";
-                document.getElementById('ui-mic').style.color = "#0f0";
+                const uiMic = document.getElementById('ui-mic');
+                if (uiMic) {
+                    uiMic.innerText = "SONIC DRIVE: ON";
+                    uiMic.style.color = "#0f0";
+                }
             } catch (err) {
-                document.getElementById('ui-mic').innerText = "MIC DENIED";
-                document.getElementById('ui-mic').style.color = "#f00";
+                const uiMic = document.getElementById('ui-mic');
+                if (uiMic) {
+                    uiMic.innerText = "MIC DENIED";
+                    uiMic.style.color = "#f00";
+                }
             }
         }
         document.addEventListener('click', initAudio, { once: true });
@@ -200,7 +225,8 @@
                 let sides = (gameState.dimension % 3) + 4; 
                 let startAngle = -Math.PI / 2; 
                 for(let i=0; i<sides * 2; i++) {
-                    let r = i % 2 === 0 ? R : R * 0.5;
+                    // Widened the inner radius from 0.5 to 0.65 so the ball can fit into the pocket!
+                    let r = i % 2 === 0 ? R : R * 0.65; 
                     let angle = startAngle + (i * Math.PI) / sides;
                     let px = cx + r * Math.cos(angle);
                     let py = cy + r * Math.sin(angle);
@@ -213,12 +239,30 @@
             boardRect = { x: cx - R, y: cy - R, size: R * 2 };
         }
 
-        function drawShapePath(ctx, shape) {
+        // Apply audio distortion to the stroke of the geometry to create glitch/wave artifacts
+        function drawShapePath(ctx, shape, applyAudioDistortion = false) {
             ctx.beginPath();
             if (shape.vertices.length === 0) return;
-            ctx.moveTo(shape.vertices[0].x, shape.vertices[0].y);
-            for(let i=1; i<shape.vertices.length; i++) {
-                ctx.lineTo(shape.vertices[i].x, shape.vertices[i].y);
+            
+            for(let i=0; i<shape.vertices.length; i++) {
+                let v = shape.vertices[i];
+                let px = v.x;
+                let py = v.y;
+                
+                // Voice inputs actively manipulate visual geometry
+                if (applyAudioDistortion && micEnabled && currentAudioLevel > 15) {
+                    // Map the vertex index to a frequency bin in the audio data
+                    let bin = Math.floor((i / shape.vertices.length) * (dataArray.length / 2));
+                    let force = (dataArray[bin] / 255) * (currentAudioLevel * 0.4);
+                    
+                    // Push the vertex outward along its normal/angle from center
+                    let angle = Math.atan2(v.y - shape.cy, v.x - shape.cx);
+                    px += Math.cos(angle) * force;
+                    py += Math.sin(angle) * force;
+                }
+
+                if (i === 0) ctx.moveTo(px, py);
+                else ctx.lineTo(px, py);
             }
             ctx.closePath();
         }
@@ -248,7 +292,8 @@
             
             if (gameState.bounces > gameState.best) {
                 gameState.best = gameState.bounces;
-                document.getElementById('ui-best').innerText = gameState.best;
+                const uiBest = document.getElementById('ui-best');
+                if (uiBest) uiBest.innerText = gameState.best;
             }
             currentAudioLevel = 90; 
         }
@@ -256,14 +301,18 @@
         function nextDimension() {
             gameState.dimension++;
             
-            document.getElementById('ui-panel').style.borderColor = '#f0f';
-            setTimeout(() => document.getElementById('ui-panel').style.borderColor = '#0ff', 300);
+            const uiPanel = document.getElementById('ui-panel');
+            if (uiPanel) {
+                uiPanel.style.borderColor = '#f0f';
+                setTimeout(() => uiPanel.style.borderColor = '#0ff', 300);
+            }
 
             generateGeometry();
             
-            document.getElementById('ui-dim').innerText = `${gameState.dimension} (${boardShape.type})`;
+            const uiDim = document.getElementById('ui-dim');
+            if (uiDim) uiDim.innerText = `${gameState.dimension} (${boardShape.type})`;
 
-            currentRule = (currentRule + 1) % 4; 
+            currentRule = (currentRule + 1) % 8; // Cycle through 8 unique Ruliad math rules
             currentPalette = palettes[gameState.dimension % palettes.length];
             currentMunkerPair = munkerPairs[gameState.dimension % munkerPairs.length];
 
@@ -314,7 +363,7 @@
                 let brushRadius = 1;
                 let injectionHeat = 120; 
                 if (micEnabled && currentAudioLevel > 15) {
-                    brushRadius = Math.max(2, Math.floor(currentAudioLevel / 12));
+                    brushRadius = Math.max(2, Math.floor(currentAudioLevel / 15));
                     injectionHeat = 255; 
                 }
                 
@@ -404,9 +453,14 @@
                     if (minDistToPocket < detectionRadius && frameCount - this.lastBounce > 5) {
                         gameState.bounces++;
                         const calcPrecision = 1 - (minDistToPocket / detectionRadius);
-                        document.getElementById('ui-precision').innerText = calcPrecision.toFixed(4);
+                        
+                        const uiPrecision = document.getElementById('ui-precision');
+                        if (uiPrecision) uiPrecision.innerText = calcPrecision.toFixed(4);
+                        
                         this.lastBounce = frameCount;
-                        document.getElementById('ui-winding').innerText = gameState.bounces;
+                        
+                        const uiWinding = document.getElementById('ui-winding');
+                        if (uiWinding) uiWinding.innerText = gameState.bounces;
                     }
                 }
             }
@@ -505,8 +559,31 @@
                 if(trailData[i] > 0) trailData[i] = Math.max(0, trailData[i] - 2);
             }
 
+            // CYMATIC AUDIO INJECTION: Generate beautiful standing wave artifacts in the pool table
+            if (micEnabled && currentAudioLevel > 20) {
+                for (let y = 0; y < B_CA_SIZE; y++) {
+                    for (let x = 0; x < B_CA_SIZE; x++) {
+                        let dx = x - B_CA_SIZE/2;
+                        let dy = y - B_CA_SIZE/2;
+                        let angle = Math.atan2(dy, dx);
+                        let dist = Math.hypot(dx, dy);
+                        
+                        // Map polar angle to an FFT frequency bin
+                        let bin = Math.floor((Math.abs(angle) / Math.PI) * (dataArray.length / 4));
+                        let amp = dataArray[bin] || 0;
+                        
+                        // Create geometric mandala/chladni artifacts based on audio peaks
+                        if (amp > 100 && Math.abs(dist - (amp/255) * (B_CA_SIZE/2)) < 2) {
+                             trailData[y * B_CA_SIZE + x] = 255;
+                        }
+                    }
+                }
+            }
+
             const imgData = bCtx.createImageData(B_CA_SIZE, B_CA_SIZE);
-            const t = Math.floor(frameCount / 4);
+            
+            // Audio dynamically shifts the "time" variable of the math
+            const t = Math.floor(frameCount / 4) + Math.floor(currentAudioLevel / 10);
 
             for (let y = 0; y < B_CA_SIZE; y++) {
                 for (let x = 0; x < B_CA_SIZE; x++) {
@@ -514,11 +591,19 @@
                     const cy = y - B_CA_SIZE/2;
                     
                     let val = 0;
-                    if (currentRule === 0) val = (cx ^ cy) - t;          
-                    else if (currentRule === 1) val = (cx * cy) + t;     
-                    else if (currentRule === 2) val = (cx | cy) - t;     
-                    else val = Math.floor(Math.sqrt(cx*cx + cy*cy)) - t; 
                     
+                    // 8 Unique Ruliad Mathematical Formulas (Simple rules, complex artifacts)
+                    const ruleMod = currentRule % 8;
+                    if (ruleMod === 0) val = (cx ^ cy) - t;                           // XOR Sierpinski
+                    else if (ruleMod === 1) val = (cx & cy) * t;                      // AND Tech-Grid
+                    else if (ruleMod === 2) val = (cx | cy) ^ t;                      // OR Maze
+                    else if (ruleMod === 3) val = Math.floor(Math.sqrt(cx*cx + cy*cy)) * ((t%5) + 1); // Radial Pulses
+                    else if (ruleMod === 4) val = (cx * cx ^ cy * cy) % Math.max(1, t); // Hyperbolic XOR
+                    else if (ruleMod === 5) val = (cx * t) ^ (cy * t);                // Zooming Munching Squares
+                    else if (ruleMod === 6) val = ((cx+t) ^ (cy-t)) % (Math.floor(currentAudioLevel/10)+2); // Audio Glitch Modulo
+                    else if (ruleMod === 7) val = Math.abs(Math.sin(cx/10)*Math.cos(cy/10)) * 255; // Trig Interference
+                    
+                    // Layer the Ball Trajectory and Voice Cymatics over the Math
                     val = Math.abs(val + trailData[y * B_CA_SIZE + x]);
                     
                     const colorIndex = val % 4;
@@ -526,9 +611,9 @@
                     
                     let r = c[0], g = c[1], b = c[2];
                     if (trailData[y * B_CA_SIZE + x] > 200) {
-                        r = 255; g = 255; b = 0; 
+                        r = 255; g = 255; b = 0; // Pure Voice Injection (Yellow)
                     } else if (trailData[y * B_CA_SIZE + x] > 50) {
-                        r = 255; g = 0; b = 150; 
+                        r = 255; g = 0; b = 150; // Ball Trail (Pink)
                     }
 
                     const idx = (y * B_CA_SIZE + x) * 4;
@@ -543,7 +628,34 @@
 
         function drawBoard() {
             ctx.save();
-            drawShapePath(ctx, boardShape);
+            drawShapePath(ctx, boardShape, false); // Clip using pure math boundary
+            ctx.clip(); 
+
+            ctx.imageSmoothingEnabled = false;
+            ctx.drawImage(boardCanvas, boardRect.x, boardRect.y, boardRect.size, boardRect.size);
+            ctx.restore();
+
+            // Draw the deformed, voice-reactive boundary!
+            ctx.strokeStyle = '#fff';
+            ctx.lineWidth = 4;
+            drawShapePath(ctx, boardShape, true); // Stroke with audio distortion
+            ctx.stroke();
+
+            ctx.fillStyle = '#000';
+            ctx.strokeStyle = '#fff';
+            ctx.lineWidth = 3;
+            
+            boardShape.pockets.forEach(p => {
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, POCKET_RADIUS, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.stroke();
+            });
+        }
+
+        function drawThickMunkerWhite() {
+            ctx.save();
+            drawShapePath(ctx, boardShape, false); // Clip to pure board shape
             ctx.clip(); 
 
             ctx.imageSmoothingEnabled = false;
@@ -620,7 +732,8 @@
                 if (gameState.transitionTimer <= 0) {
                     gameState.state = 'PLAYING';
                     gameState.bounces = 0;
-                    document.getElementById('ui-winding').innerText = "0";
+                    const uiWinding = document.getElementById('ui-winding');
+                    if (uiWinding) uiWinding.innerText = "0";
                     nextDimension();
                 }
                 
