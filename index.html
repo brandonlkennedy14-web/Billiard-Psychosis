@@ -65,6 +65,11 @@
             border: 1px solid #0ff;
         }
 
+        #targetCanvas {
+            width: 120px;
+            height: 30px;
+        }
+
         .scanlines {
             position: absolute;
             top: 0; left: 0; width: 100vw; height: 100vh;
@@ -100,9 +105,10 @@
         <span class="hidden md:inline">HARMONIC: <span id="ui-harmonic" class="hud-highlight">0.0</span></span>
         <span>BEST: <span id="ui-best" class="hud-highlight">0</span></span>
         <div class="target-container">
-            <span>SINK TARGET:</span>
-            <canvas id="targetCanvas" width="30" height="30"></canvas>
+            <span>SINK SEQUENCE:</span>
+            <canvas id="targetCanvas" width="120" height="30"></canvas>
         </div>
+        <span class="hidden md:inline hud-highlight">DRAG TO SHOOT</span>
         <span id="ui-mic" class="hud-mic">[CLICK FOR AUDIO]</span>
     </div>
     
@@ -130,7 +136,6 @@
         boardCanvas.width = B_CA_SIZE;
         boardCanvas.height = B_CA_SIZE;
         
-        // Double buffer for feedback math
         let bData = new Uint8Array(B_CA_SIZE * B_CA_SIZE); 
         let bDataNext = new Uint8Array(B_CA_SIZE * B_CA_SIZE); 
         let trailData = new Uint8Array(B_CA_SIZE * B_CA_SIZE); 
@@ -144,20 +149,18 @@
         let currentPalette = palettes[0];
         let bgPaletteShift = 0; 
         
-        // Harmonic Munker-White Pairs
         const munkerPairs = [
-            ['#00FFFF', '#FF00FF'], // Cyan / Magenta
-            ['#800080', '#00FF00'], // Purple / Green
-            ['#0000FF', '#FFFF00'], // Blue / Yellow
-            ['#FF0000', '#0000FF']  // Red / Blue
+            ['#00FFFF', '#FF00FF'], 
+            ['#800080', '#00FF00'], 
+            ['#0000FF', '#FFFF00'], 
+            ['#FF0000', '#0000FF']  
         ];
         let currentMunkerPair = munkerPairs[0];
-        let targetMunkerIndex = 0; // Defines which illusion color the target grey ball receives
+        let targetMunkerIndex = 0; 
         
         let WIDTH = window.innerWidth || 800;
         let HEIGHT = window.innerHeight || 600;
         
-        // Dynamic Geometry State
         let boardShape = { type: 'POLYGON', cx: 0, cy: 0, r: 0, vertices: [], pockets: [] };
         let boardRect = { x: 0, y: 0, size: 0 };
         
@@ -171,10 +174,13 @@
             best: 0,
             state: 'PLAYING', 
             transitionTimer: 0,
-            transitionType: 'NEXT', // 'NEXT' or 'GAMEOVER'
+            transitionType: 'NEXT', 
             sinkHole: {x: 0, y: 0},
-            sinkingBall: null
+            sinkingBall: null,
+            targetsSunk: 0
         };
+
+        let impactRipples = []; 
 
         // --- AUDIO ENGINE ---
         let audioCtx, analyser, dataArray;
@@ -209,6 +215,49 @@
         }
         document.addEventListener('click', initAudio, { once: true });
 
+        // --- MANUAL SHOOTING CONTROLS (SLINGSHOT) ---
+        let mouse = { x: 0, y: 0, isDragging: false, startX: 0, startY: 0 };
+
+        function handlePointerDown(e) {
+            if (!micEnabled && e.type !== 'touchstart') initAudio(); 
+            mouse.isDragging = true;
+            mouse.startX = e.touches ? e.touches[0].clientX : e.clientX;
+            mouse.startY = e.touches ? e.touches[0].clientY : e.clientY;
+            mouse.x = mouse.startX;
+            mouse.y = mouse.startY;
+        }
+
+        function handlePointerMove(e) {
+            if (!mouse.isDragging) return;
+            mouse.x = e.touches ? e.touches[0].clientX : e.clientX;
+            mouse.y = e.touches ? e.touches[0].clientY : e.clientY;
+        }
+
+        function handlePointerUp(e) {
+            if (mouse.isDragging) {
+                let dx = mouse.startX - mouse.x;
+                let dy = mouse.startY - mouse.y;
+                let whiteBall = balls.find(b => b.type === 'WHITE');
+                if (whiteBall && !whiteBall.isSinking && gameState.state === 'PLAYING') {
+                    let dist = Math.hypot(dx, dy);
+                    if (dist > 300) {
+                        dx = (dx / dist) * 300;
+                        dy = (dy / dist) * 300;
+                    }
+                    whiteBall.vx += dx * 0.12;
+                    whiteBall.vy += dy * 0.12;
+                }
+                mouse.isDragging = false;
+            }
+        }
+
+        canvas.addEventListener('mousedown', handlePointerDown);
+        canvas.addEventListener('mousemove', handlePointerMove);
+        window.addEventListener('mouseup', handlePointerUp);
+        canvas.addEventListener('touchstart', handlePointerDown, {passive: true});
+        canvas.addEventListener('touchmove', handlePointerMove, {passive: true});
+        window.addEventListener('touchend', handlePointerUp);
+
         // --- GENERATIVE MESH GEOMETRY ---
         function generateGeometry() {
             const cx = WIDTH / 2;
@@ -231,7 +280,6 @@
                     let sinT = Math.abs(Math.sin(theta));
                     let rSq = sqBaseR / Math.max(cosT, sinT);
                     let rLobe = R * 0.6 + R * 0.4 * Math.cos(4 * theta);
-                    
                     let rFinal = Math.max(rSq, rLobe);
                     verts.push({ x: cx + rFinal * Math.cos(theta), y: cy + rFinal * Math.sin(theta) });
                 }
@@ -278,7 +326,6 @@
                     let x = (hr - pr) * Math.cos(theta) + d * Math.cos(((hr - pr) / pr) * theta);
                     let y = (hr - pr) * Math.sin(theta) - d * Math.sin(((hr - pr) / pr) * theta);
                     verts.push({ x: cx + x, y: cy + y });
-                    
                     let dist = Math.hypot(x, y);
                     if (dist > maxDist) maxDist = dist;
                 }
@@ -340,29 +387,33 @@
 
         window.addEventListener('resize', () => { resize(); initBalls(); });
 
-        // --- TARGET HUD RENDERING ---
+        // --- TARGET HUD RENDERING (THE ILLUSION SHELL GAME) ---
         function updateTargetHUD() {
-            tCtx.clearRect(0, 0, 30, 30);
+            tCtx.clearRect(0, 0, 120, 30);
+            let remaining = 4 - gameState.targetsSunk;
             
-            // Draw Target Grey Ball Base
-            tCtx.fillStyle = '#888888';
-            tCtx.beginPath(); tCtx.arc(15, 15, 12, 0, Math.PI * 2); tCtx.fill();
-            tCtx.fillStyle = '#fff';
-            tCtx.beginPath(); tCtx.arc(15, 15, 6, 0, Math.PI * 2); tCtx.fill();
-            tCtx.fillStyle = '#000';
-            tCtx.beginPath(); tCtx.arc(15, 15, 2, 0, Math.PI * 2); tCtx.fill();
+            for (let i = 0; i < remaining; i++) {
+                let cx = 15 + i * 30;
+                
+                // Base target ball is grey
+                tCtx.fillStyle = '#888888';
+                tCtx.beginPath(); tCtx.arc(cx, 15, 12, 0, Math.PI * 2); tCtx.fill();
+                tCtx.fillStyle = '#fff';
+                tCtx.beginPath(); tCtx.arc(cx, 15, 6, 0, Math.PI * 2); tCtx.fill();
+                tCtx.fillStyle = '#000';
+                tCtx.beginPath(); tCtx.arc(cx, 15, 2, 0, Math.PI * 2); tCtx.fill();
 
-            // Draw specific Munker-White stripes to replicate the illusion!
-            // We use targetMunkerIndex to decide which color overlaps the center
-            const c1 = currentMunkerPair[targetMunkerIndex];
-            const c2 = currentMunkerPair[1 - targetMunkerIndex];
-            
-            tCtx.fillStyle = c1;
-            tCtx.fillRect(0, 3, 30, 4);
-            tCtx.fillRect(0, 23, 30, 4);
-            
-            tCtx.fillStyle = c2;
-            tCtx.fillRect(0, 13, 30, 4);
+                // Applying the shifting dimension palette to give them unique perceived colors
+                let colorIndex = (targetMunkerIndex + (4 - remaining) + i) % 4; 
+                let c1 = `rgb(${currentPalette[colorIndex].join(',')})`;
+                let c2 = `rgb(${currentPalette[(colorIndex+2)%4].join(',')})`;
+                
+                tCtx.fillStyle = c1;
+                tCtx.fillRect(cx - 15, 3, 30, 4);
+                tCtx.fillRect(cx - 15, 23, 30, 4);
+                tCtx.fillStyle = c2;
+                tCtx.fillRect(cx - 15, 13, 30, 4);
+            }
         }
 
         // --- GAME LOGIC ---
@@ -387,7 +438,7 @@
             gameState.bounces = 0;
             const uiWinding = document.getElementById('ui-winding');
             if (uiWinding) uiWinding.innerText = "0";
-            nextDimension(true); // True forces reset
+            nextDimension(true); 
         }
 
         function nextDimension(isReset = false) {
@@ -405,21 +456,21 @@
             if (uiDim) uiDim.innerText = `${gameState.dimension} (${boardShape.type})`;
 
             currentRule = (currentRule + 1) % 8; 
-            
             const interestingRules = [30, 90, 110, 150, 105, 73, 22, 126, 45, 169];
             bgRule = interestingRules[Math.floor(Math.random() * interestingRules.length)];
 
             currentPalette = palettes[gameState.dimension % palettes.length];
             currentMunkerPair = munkerPairs[gameState.dimension % munkerPairs.length];
 
-            // Randomize which stripe color is assigned to the Target Grey Ball
-            targetMunkerIndex = Math.random() > 0.5 ? 0 : 1;
+            gameState.targetsSunk = 0;
+            targetMunkerIndex = Math.floor(Math.random() * 4);
             updateTargetHUD();
 
             caData.fill(0);
             trailData.fill(0);
             bData.fill(0);
             bgRowColors.fill(bgPaletteShift);
+            impactRipples = []; 
             
             if (caData.length > 0) caData[Math.floor(CA_W / 2)] = 1;
 
@@ -432,17 +483,18 @@
         class Ball {
             constructor(x, y, vx, vy, radius, type, trueColor) {
                 this.x = x; this.y = y; this.vx = vx; this.vy = vy; this.radius = radius;
-                this.type = type; // 'WHITE', 'BLACK', 'TARGET', 'DECOY'
+                this.type = type; 
                 this.trueColor = trueColor; 
                 this.angle = 0; 
                 this.isSinking = false; 
+                this.dead = false; // Flag to permanently remove from board after sinking
                 this.targetPocket = null;
+                this.lastBounce = 0;
             }
 
             update() {
-                if (this.isSinking) return; // Physics handled separately below
+                if (this.isSinking || this.dead) return; 
 
-                // Sonic Drive Impulse pushes ALL balls
                 if (micEnabled && currentAudioLevel > 20) {
                     const dx = this.x - boardShape.cx;
                     const dy = this.y - boardShape.cy;
@@ -452,18 +504,21 @@
                     this.vy += (dy / dist) * force;
                 }
 
-                // Drag/Friction to eventually slow them down naturally
-                this.vx *= 0.998;
-                this.vy *= 0.998;
+                this.vx *= 0.985;
+                this.vy *= 0.985;
 
                 const speed = Math.hypot(this.vx, this.vy);
-                if (speed > 10) { 
-                    this.vx = (this.vx / speed) * 10;
-                    this.vy = (this.vy / speed) * 10;
+                if (speed > 18) { 
+                    this.vx = (this.vx / speed) * 18;
+                    this.vy = (this.vy / speed) * 18;
+                } else if (speed < 0.05) { 
+                    this.vx = 0;
+                    this.vy = 0;
                 }
             }
 
             draw(ctx) {
+                if (this.dead) return;
                 ctx.save();
                 ctx.translate(this.x, this.y);
                 
@@ -475,7 +530,6 @@
                 ctx.fillStyle = this.trueColor;
                 ctx.beginPath(); ctx.arc(0, 0, this.radius, 0, Math.PI * 2); ctx.fill();
 
-                // Ball Center details
                 if (this.type === 'BLACK') {
                     ctx.fillStyle = '#fff';
                     ctx.beginPath(); ctx.arc(this.radius*0.2, 0, this.radius * 0.5, 0, Math.PI * 2); ctx.fill();
@@ -487,7 +541,6 @@
                     ctx.fillStyle = '#ccc';
                     ctx.beginPath(); ctx.arc(this.radius*0.2, 0, this.radius * 0.2, 0, Math.PI * 2); ctx.fill();
                 } else {
-                    // Grey Target/Decoys
                     ctx.fillStyle = '#fff';
                     ctx.beginPath(); ctx.arc(this.radius*0.2, 0, this.radius * 0.5, 0, Math.PI * 2); ctx.fill();
                     ctx.fillStyle = '#000';
@@ -500,12 +553,16 @@
 
         let balls = [];
         function initBalls() {
-            // Spawn 4 balls near center, slight random scatter
+            let cx = boardShape.cx;
+            let cy = boardShape.cy;
+            // Spawn 1 White, 1 Black, and 4 Identical Grey targets!
             balls = [
-                new Ball(boardShape.cx - 25, boardShape.cy - 25, -2, -2, 14, 'WHITE', '#ffffff'),
-                new Ball(boardShape.cx + 25, boardShape.cy + 25, 2, 2, 14, 'BLACK', '#222222'),
-                new Ball(boardShape.cx + 25, boardShape.cy - 25, 2, -2, 14, 'TARGET', '#888888'),
-                new Ball(boardShape.cx - 25, boardShape.cy + 25, -2, 2, 14, 'DECOY', '#888888')
+                new Ball(cx, cy, 0, 0, 14, 'BLACK', '#222222'),
+                new Ball(cx - 30, cy - 30, 0, 0, 14, 'TARGET', '#888888'),
+                new Ball(cx + 30, cy - 30, 0, 0, 14, 'TARGET', '#888888'),
+                new Ball(cx - 30, cy + 30, 0, 0, 14, 'TARGET', '#888888'),
+                new Ball(cx + 30, cy + 30, 0, 0, 14, 'TARGET', '#888888'),
+                new Ball(cx, cy + 80, 0, 0, 14, 'WHITE', '#ffffff')
             ];
             updateTargetHUD();
         }
@@ -514,7 +571,9 @@
         function updateBackgroundRuliad() {
             if (CA_W <= 0 || CA_H <= 0) return;
 
-            // Shift grid downwards
+            let prevRow = new Uint8Array(CA_W);
+            for(let x=0; x<CA_W; x++) prevRow[x] = caData[(CA_H > 1 ? 1 : 0) * CA_W + x];
+
             for (let y = CA_H - 1; y > 0; y--) {
                 for (let x = 0; x < CA_W; x++) {
                     caData[y * CA_W + x] = caData[(y - 1) * CA_W + x];
@@ -525,33 +584,25 @@
             bgRowColors[0] = bgPaletteShift;
             let activeRule = bgRule; 
             
-            if (gameState.state === 'PLAYING') {
-                balls.forEach(b => {
-                    let ballCaX = Math.floor((b.x / WIDTH) * CA_W);
-                    if (ballCaX >= 0 && ballCaX < CA_W) {
-                        caData[ballCaX] = 1; 
-                        caData[Math.max(0, ballCaX - 1)] = 1; 
-                        caData[Math.min(CA_W - 1, ballCaX + 1)] = 1;
-                    }
-                });
-            }
-
-            if (micEnabled && currentAudioLevel > 15) {
-                activeRule = Math.floor(harmonicSpectrum * 2.55) ^ (frameCount % 255);
-                const step = Math.max(1, Math.floor((dataArray.length / 2) / CA_W));
-                for (let x = 0; x < CA_W; x++) {
-                    if (dataArray[x * step] > 80) caData[x] = 1;
-                }
+            if (micEnabled && currentAudioLevel > 15 && harmonicSpectrum > 5) {
+                activeRule = Math.floor(harmonicSpectrum * 2.55);
             } 
 
             for (let x = 0; x < CA_W; x++) {
-                const left = caData[x === 0 ? CA_W - 1 : x - 1] ? 4 : 0;
-                const center = caData[x] ? 2 : 0;
-                const right = caData[x === CA_W - 1 ? 0 : x + 1] ? 1 : 0;
-                
-                if (caData[x] !== 1) {
-                    caData[x] = (activeRule & (1 << (left + center + right))) ? 1 : 0;
-                }
+                const left = prevRow[x === 0 ? CA_W - 1 : x - 1] ? 4 : 0;
+                const center = prevRow[x] ? 2 : 0;
+                const right = prevRow[x === CA_W - 1 ? 0 : x + 1] ? 1 : 0;
+                caData[x] = (activeRule & (1 << (left + center + right))) ? 1 : 0;
+            }
+
+            if (gameState.state === 'PLAYING') {
+                balls.forEach(b => {
+                    if (b.dead) return;
+                    let ballCaX = Math.floor((b.x / WIDTH) * CA_W);
+                    if (ballCaX >= 0 && ballCaX < CA_W) {
+                        caData[ballCaX] = 1; 
+                    }
+                });
             }
 
             const imgData = rCtx.createImageData(CA_W, CA_H);
@@ -605,36 +656,29 @@
 
             const imgData = bCtx.createImageData(B_CA_SIZE, B_CA_SIZE);
             const t = Math.floor(frameCount / 3); 
-            const audioShift = Math.floor(currentAudioLevel / 15);
-            const dimMod = (gameState.dimension % 5) + 1; 
+            const scale = 1 + (gameState.dimension % 3) * 0.5;
 
             for (let y = 0; y < B_CA_SIZE; y++) {
                 for (let x = 0; x < B_CA_SIZE; x++) {
                     let i = y * B_CA_SIZE + x;
+                    let prevVal = bData[i]; 
                     
-                    let cx = x - B_CA_SIZE/2 + audioShift;
-                    let cy = y - B_CA_SIZE/2 - audioShift;
-                    
-                    let nSum = 0, nCount = 0;
-                    if (x > 0) { nSum += bData[i - 1]; nCount++; }
-                    if (x < B_CA_SIZE - 1) { nSum += bData[i + 1]; nCount++; }
-                    if (y > 0) { nSum += bData[i - B_CA_SIZE]; nCount++; }
-                    if (y < B_CA_SIZE - 1) { nSum += bData[i + B_CA_SIZE]; nCount++; }
-                    let avg = nSum / nCount;
+                    let sx = Math.floor((x - B_CA_SIZE/2) / scale);
+                    let sy = Math.floor((y - B_CA_SIZE/2) / scale);
 
                     let vMath = 0;
-                    const ruleMod = (currentRule + Math.floor(harmonicSpectrum / 10)) % 8;
+                    const ruleMod = currentRule % 8;
                     
-                    if (ruleMod === 0) vMath = (cx * dimMod) ^ (cy * dimMod);                           
-                    else if (ruleMod === 1) vMath = (cx & cy) * dimMod;                      
-                    else if (ruleMod === 2) vMath = (cx | cy) * dimMod;                      
-                    else if (ruleMod === 3) vMath = Math.floor(Math.sqrt(cx*cx + cy*cy)) * dimMod; 
-                    else if (ruleMod === 4) vMath = ((cx * cx) ^ (cy * cy)) % Math.max(1, t); 
-                    else if (ruleMod === 5) vMath = (cx * cy) ^ cx * dimMod;                
-                    else if (ruleMod === 6) vMath = (cx+cy) ^ ((cx-cy) * dimMod); 
-                    else if (ruleMod === 7) vMath = Math.abs(cx * dimMod ^ cy * dimMod); 
+                    if (ruleMod === 0) vMath = (sx ^ sy) ^ prevVal;                           
+                    else if (ruleMod === 1) vMath = (sx & sy) ^ (prevVal * 2);                      
+                    else if (ruleMod === 2) vMath = (sx | sy) ^ prevVal;                      
+                    else if (ruleMod === 3) vMath = Math.floor(Math.sqrt(sx*sx + sy*sy)) ^ prevVal; 
+                    else if (ruleMod === 4) vMath = (sx * sx ^ sy * sy) % Math.max(1, prevVal); 
+                    else if (ruleMod === 5) vMath = (sx * prevVal) ^ (sy * prevVal);                
+                    else if (ruleMod === 6) vMath = (sx+sy) ^ (sx-sy) ^ prevVal; 
+                    else if (ruleMod === 7) vMath = Math.abs(sx ^ sy) * 2 ^ prevVal; 
                     
-                    let val = Math.abs(vMath - t*2 + avg * 0.9 + trailData[i]*1.5);
+                    let val = Math.abs(vMath - t*3 + trailData[i]*1.5);
                     bDataNext[i] = val % 256;
                     
                     let colorShift = Math.floor(frameCount / 15);
@@ -680,14 +724,15 @@
             drawShapePath(ctx, boardShape);
             ctx.clip(); 
             
-            const stripeH = 5; 
+            const stripeH = 3; 
+            const gap = 3;
             
-            for (let y = boardRect.y; y < boardRect.y + boardRect.size; y += stripeH * 4) {
+            for (let y = boardRect.y; y < boardRect.y + boardRect.size; y += (stripeH + gap) * 2) {
                 ctx.fillStyle = currentMunkerPair[0]; 
                 ctx.fillRect(boardRect.x, y, boardRect.size, stripeH);
                 
                 ctx.fillStyle = currentMunkerPair[1];
-                ctx.fillRect(boardRect.x, y + stripeH * 2, boardRect.size, stripeH);
+                ctx.fillRect(boardRect.x, y + stripeH + gap, boardRect.size, stripeH);
             }
             ctx.restore();
         }
@@ -767,6 +812,27 @@
                 ctx.imageSmoothingEnabled = false;
                 ctx.drawImage(ruliadCanvas, 0, 0, WIDTH, HEIGHT);
             }
+
+            // --- DRAW VISUAL RIPPLES FROM WHITE BALL IMPACTS ---
+            ctx.save();
+            ctx.globalCompositeOperation = 'color-dodge'; 
+            for (let i = impactRipples.length - 1; i >= 0; i--) {
+                let rip = impactRipples[i];
+                rip.r += 12; 
+                
+                ctx.beginPath();
+                ctx.arc(rip.x, rip.y, rip.r, 0, Math.PI * 2);
+                
+                let c = currentPalette[(2 + rip.colorShift) % 4];
+                let alpha = Math.max(0, 1 - (rip.r / (Math.max(WIDTH, HEIGHT) * 0.8)));
+                
+                ctx.strokeStyle = `rgba(${c[0]}, ${c[1]}, ${c[2]}, ${alpha * 0.8})`;
+                ctx.lineWidth = 25; 
+                ctx.stroke();
+                
+                if (alpha <= 0) impactRipples.splice(i, 1);
+            }
+            ctx.restore();
 
             if (gameState.state === 'TRANSITION') {
                 gameState.transitionTimer--;
@@ -848,8 +914,13 @@
             for (let step = 0; step < subSteps; step++) {
                 // 1. Update ball positions and Wall Collisions
                 balls.forEach(b => {
+                    if (b.dead) return;
                     b.update();
                     if (b.isSinking) return;
+
+                    b.x += b.vx * dt;
+                    b.y += b.vy * dt;
+                    b.angle += Math.hypot(b.vx, b.vy) * 0.05 * dt;
 
                     let hitWallThisFrame = false;
                     let overlapOffset = {x: 0, y: 0};
@@ -890,7 +961,6 @@
                     b.x += overlapOffset.x;
                     b.y += overlapOffset.y;
 
-                    // Emergency Pull-back
                     let dCenter = Math.hypot(b.x - boardShape.cx, b.y - boardShape.cy);
                     if (dCenter > boardShape.r + b.radius) {
                         let pX = boardShape.cx - b.x, pY = boardShape.cy - b.y;
@@ -898,10 +968,15 @@
                         b.x += (pX / pLen) * 5; b.y += (pY / pLen) * 5;
                     }
 
-                    if (hitWallThisFrame) {
-                        bgPaletteShift = (bgPaletteShift + 1) % 4;
+                    if (hitWallThisFrame && frameCount - b.lastBounce > 5) {
+                        b.lastBounce = frameCount;
+                        if (b.type === 'WHITE') {
+                            bgPaletteShift = (bgPaletteShift + 1) % 4;
+                            impactRipples.push({x: b.x, y: b.y, r: 0, colorShift: bgPaletteShift});
+                        }
                         gameState.bounces++;
-                        document.getElementById('ui-winding').innerText = gameState.bounces;
+                        const uiWinding = document.getElementById('ui-winding');
+                        if(uiWinding) uiWinding.innerText = gameState.bounces;
                     }
                 });
 
@@ -909,7 +984,7 @@
                 for (let i = 0; i < balls.length; i++) {
                     for (let j = i + 1; j < balls.length; j++) {
                         let b1 = balls[i]; let b2 = balls[j];
-                        if (b1.isSinking || b2.isSinking) continue;
+                        if (b1.isSinking || b2.isSinking || b1.dead || b2.dead) continue;
 
                         let dx = b2.x - b1.x; let dy = b2.y - b1.y;
                         let dist = Math.hypot(dx, dy);
@@ -923,16 +998,19 @@
                             b2.x += nx * overlap / 2; b2.y += ny * overlap / 2;
 
                             let kx = b1.vx - b2.vx; let ky = b1.vy - b2.vy;
-                            let p = (nx * kx + ny * ky); // Elastic assuming equal mass
+                            let p = (nx * kx + ny * ky); 
                             
-                            b1.vx -= p * nx; b1.vy -= p * ny;
-                            b2.vx += p * nx; b2.vy += p * ny;
+                            if (p > 0) { 
+                                b1.vx -= p * nx; b1.vy -= p * ny;
+                                b2.vx += p * nx; b2.vy += p * ny;
+                            }
                         }
                     }
                 }
 
                 // 3. Pocket Sinking Logic
                 balls.forEach(b => {
+                    if (b.dead) return;
                     if (b.isSinking) {
                         let dx = b.targetPocket.x - b.x;
                         let dy = b.targetPocket.y - b.y;
@@ -940,29 +1018,31 @@
 
                         if (dist < POCKET_RADIUS * 0.5) {
                             if (b.type === 'WHITE') {
-                                // Respawn White Ball safely
                                 b.isSinking = false;
                                 b.x = boardShape.cx;
-                                b.y = boardShape.cy;
+                                b.y = boardShape.cy + 80;
                                 b.vx = 0; b.vy = 0;
                             } else if (b.type === 'TARGET') {
-                                triggerTransition(b.targetPocket, 'NEXT', b); 
+                                gameState.targetsSunk++;
+                                b.dead = true;
+                                b.isSinking = false;
+                                updateTargetHUD();
+                                if (gameState.targetsSunk >= 4) {
+                                    triggerTransition(b.targetPocket, 'NEXT', b); 
+                                }
                             } else {
-                                // Black or Decoy sunk!
                                 triggerTransition(b.targetPocket, 'GAMEOVER', b); 
                             }
                         } else {
-                            let pull = 25.0 * dt; 
-                            b.vx += (dx / dist) * pull;
-                            b.vy += (dy / dist) * pull;
-                            b.vx *= 0.85; b.vy *= 0.85; 
+                            b.vx = (dx / dist) * 15;
+                            b.vy = (dy / dist) * 15;
                             b.x += b.vx * dt; b.y += b.vy * dt;
                             b.angle += Math.hypot(b.vx, b.vy) * 0.05 * dt;
                         }
                     } else {
-                        // Check if ball falls into pocket gravity
                         for (let p of boardShape.pockets) {
                             let dist = Math.hypot(p.x - b.x, p.y - b.y);
+                            
                             let pullRadius = POCKET_RADIUS * 2.5; 
                             if (dist < pullRadius && dist > POCKET_RADIUS * 1.5) {
                                 let gravity = 1.0 * (1 - dist / pullRadius) * dt; 
@@ -976,7 +1056,6 @@
                             }
                         }
                         
-                        // Write Trail to CA (Only non-sinking balls)
                         const caX = Math.floor(((b.x - boardRect.x) / boardRect.size) * B_CA_SIZE);
                         const caY = Math.floor(((b.y - boardRect.y) / boardRect.size) * B_CA_SIZE);
                         let injectionHeat = 120; 
@@ -989,9 +1068,37 @@
                 });
             }
 
+            // Cleanup dead balls
+            balls = balls.filter(b => !b.dead);
+
             // === DRAW FRAME ===
             drawBoard();
             balls.forEach(b => b.draw(ctx));
+            
+            // DRAW CUE AIMING LINE
+            if (mouse.isDragging && gameState.state === 'PLAYING') {
+                let whiteBall = balls.find(b => b.type === 'WHITE');
+                if (whiteBall && !whiteBall.isSinking && !whiteBall.dead) {
+                    let dx = mouse.startX - mouse.x;
+                    let dy = mouse.startY - mouse.y;
+                    
+                    ctx.save();
+                    ctx.beginPath();
+                    ctx.moveTo(whiteBall.x, whiteBall.y);
+                    ctx.lineTo(whiteBall.x + dx, whiteBall.y + dy);
+                    ctx.strokeStyle = '#fff';
+                    ctx.lineWidth = 3;
+                    ctx.setLineDash([5, 5]);
+                    ctx.stroke();
+                    
+                    ctx.beginPath();
+                    ctx.arc(whiteBall.x + dx, whiteBall.y + dy, 5, 0, Math.PI * 2);
+                    ctx.fillStyle = 'rgba(255, 255, 255, 0.5)';
+                    ctx.fill();
+                    ctx.restore();
+                }
+            }
+
             drawThickMunkerWhite();
             drawPockets();
 
