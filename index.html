@@ -91,7 +91,7 @@
             text-shadow: 2px 2px 0 #000;
             transition: color 0.2s;
         }
-        
+
         .bmc-link:hover {
             color: #0ff;
         }
@@ -111,7 +111,7 @@
         <span class="hidden md:inline hud-highlight">DRAG TO SHOOT</span>
         <span id="ui-mic" class="hud-mic">[CLICK FOR AUDIO]</span>
     </div>
-    
+
     <canvas id="gameCanvas"></canvas>
     <div class="scanlines"></div>
     <a href="https://buymeacoffee.com/brandonkennedy" target="_blank" class="bmc-link">BUYMEACOFFEE.COM/BRANDONKENNEDY</a>
@@ -121,25 +121,25 @@
         const ctx = canvas.getContext('2d');
         const targetCanvas = document.getElementById('targetCanvas');
         const tCtx = targetCanvas.getContext('2d');
-        
+
         // --- BACKGROUND RULIAD SETUP ---
         const ruliadCanvas = document.createElement('canvas');
         const rCtx = ruliadCanvas.getContext('2d');
         const CA_PIXEL = 8;
         let CA_W = 1, CA_H = 1, caData;
         let bgRowColors = new Uint8Array(0); 
-        
+
         // --- BOARD RULIAD (POOL TABLE) SETUP ---
         const boardCanvas = document.createElement('canvas');
         const bCtx = boardCanvas.getContext('2d');
         const B_CA_SIZE = 64; 
         boardCanvas.width = B_CA_SIZE;
         boardCanvas.height = B_CA_SIZE;
-        
+
         let bData = new Uint8Array(B_CA_SIZE * B_CA_SIZE); 
         let bDataNext = new Uint8Array(B_CA_SIZE * B_CA_SIZE); 
         let trailData = new Uint8Array(B_CA_SIZE * B_CA_SIZE); 
-        
+
         const palettes = [
             [[0,255,255], [255,0,255], [255,255,0], [0,0,255]], 
             [[0,255,0], [128,0,128], [0,128,255], [255,165,0]], 
@@ -148,7 +148,7 @@
         ];
         let currentPalette = palettes[0];
         let bgPaletteShift = 0; 
-        
+
         const munkerPairs = [
             ['#00FFFF', '#FF00FF'], 
             ['#800080', '#00FF00'], 
@@ -157,13 +157,13 @@
         ];
         let currentMunkerPair = munkerPairs[0];
         let targetMunkerIndex = 0; 
-        
+
         let WIDTH = window.innerWidth || 800;
         let HEIGHT = window.innerHeight || 600;
-        
+
         let boardShape = { type: 'POLYGON', cx: 0, cy: 0, r: 0, vertices: [], pockets: [] };
         let boardRect = { x: 0, y: 0, size: 0 };
-        
+
         let currentRule = 0; 
         let bgRule = 30; 
         let frameCount = 0;
@@ -262,33 +262,33 @@
         function generateGeometry() {
             const cx = WIDTH / 2;
             const cy = HEIGHT / 2 + 25; 
-            
+
             // Radically randomize size per dimension
             const scaleFactor = 0.30 + Math.random() * 0.18; 
             const R = Math.max(10, Math.min(WIDTH, HEIGHT) * scaleFactor); 
-            
+
             let verts = [];
             let pockets = [];
-            
+
             const types = ['POLYGON', 'STAR', 'HYPERBOLIC_SQUARE', 'HYPOTROCHOID'];
             const type = types[Math.floor(Math.random() * types.length)];
-            
+
             // Random global rotation makes every shape feel entirely fresh
             const rotOffset = Math.random() * Math.PI * 2;
-            
+
             if (type === 'HYPERBOLIC_SQUARE') {
                 const resolution = 200;
                 const sqBaseR = R * (0.45 + Math.random() * 0.3); // Dynamic core size
                 const lobeStrength = R * (0.2 + Math.random() * 0.4); // Dynamic petal length
                 const lobeCount = Math.floor(Math.random() * 4) * 2 + 2; // 2, 4, 6, 8 lobes
-                
+
                 for(let i=0; i<resolution; i++) {
                     let theta = (i / resolution) * Math.PI * 2;
                     let cosT = Math.abs(Math.cos(theta));
                     let sinT = Math.abs(Math.sin(theta));
                     let rSq = sqBaseR / Math.max(cosT, sinT);
                     let rLobe = R * 0.5 + lobeStrength * Math.cos(lobeCount * theta);
-                    
+
                     let rFinal = Math.max(rSq, rLobe);
                     verts.push({ x: cx + rFinal * Math.cos(theta + rotOffset), y: cy + rFinal * Math.sin(theta + rotOffset) });
                 }
@@ -310,8 +310,16 @@
                 }
             } 
             else if (type === 'STAR') {
-                let sides = Math.floor(Math.random() * 6) + 4; // 4 to 9 point star
-                let innerRatio = 0.25 + Math.random() * 0.55; // Highly variable depths
+                let sides = Math.floor(Math.random() * 4) + 4; // 4 to 7 points
+                // innerRatio min 0.48 — below this corners are physically too tight for radius-14 balls
+                let innerRatio = 0.48 + Math.random() * 0.32; // 0.48 to 0.80
+                // Enforce gap width >= 3 ball diameters at every inner vertex
+                const BALL_D = 28;
+                const minGap = BALL_D * 3;
+                const gapWidth = 2 * R * innerRatio * Math.sin(Math.PI / sides);
+                if (gapWidth < minGap) {
+                    innerRatio = Math.min(0.85, minGap / (2 * R * Math.sin(Math.PI / sides)));
+                }
                 for(let i=0; i<sides * 2; i++) {
                     let r = i % 2 === 0 ? R : R * innerRatio; 
                     let angle = rotOffset + (i * Math.PI) / sides;
@@ -328,12 +336,12 @@
                 const pr = hr * (numLobes - 1) / numLobes;
                 const d = R * (0.2 + Math.random() * 0.7); // Insanely variable sweeping loops
                 let maxDist = 0;
-                
+
                 for(let i=0; i<resolution; i++) {
                     let theta = (i / resolution) * Math.PI * 2 * numLobes;
                     let x = (hr - pr) * Math.cos(theta) + d * Math.cos(((hr - pr) / pr) * theta);
                     let y = (hr - pr) * Math.sin(theta) - d * Math.sin(((hr - pr) / pr) * theta);
-                    
+
                     // Apply offset rotation
                     let rotX = x * Math.cos(rotOffset) - y * Math.sin(rotOffset);
                     let rotY = x * Math.sin(rotOffset) + y * Math.cos(rotOffset);
@@ -342,7 +350,7 @@
                     let dist = Math.hypot(rotX, rotY);
                     if (dist > maxDist) maxDist = dist;
                 }
-                
+
                 for(let i=0; i<verts.length; i++) {
                     let p = verts[i];
                     if (Math.hypot(p.x - cx, p.y - cy) > maxDist * 0.95) {
@@ -352,7 +360,7 @@
                     }
                 }
             }
-            
+
             boardShape = { type, cx, cy, r: R, vertices: verts, pockets: pockets };
             // Ensure bounding box covers extreme geometric extensions
             boardRect = { x: cx - R * 1.8, y: cy - R * 1.8, size: R * 3.6 };
@@ -361,12 +369,12 @@
         function drawShapePath(ctx, shape, applyAudioDistortion = false) {
             ctx.beginPath();
             if (shape.vertices.length === 0) return;
-            
+
             for(let i=0; i<shape.vertices.length; i++) {
                 let v = shape.vertices[i];
                 let px = v.x;
                 let py = v.y;
-                
+
                 if (applyAudioDistortion && micEnabled && currentAudioLevel > 15) {
                     let bin = Math.floor((i / shape.vertices.length) * (dataArray.length / 2));
                     let force = (dataArray[bin] / 255) * (currentAudioLevel * 0.5);
@@ -385,15 +393,15 @@
         function resize() {
             WIDTH = canvas.width = window.innerWidth || 320;
             HEIGHT = canvas.height = window.innerHeight || 320;
-            
+
             CA_W = Math.max(1, Math.ceil(WIDTH / CA_PIXEL));
             CA_H = Math.max(1, Math.ceil(HEIGHT / CA_PIXEL));
-            
+
             ruliadCanvas.width = CA_W;
             ruliadCanvas.height = CA_H;
             caData = new Uint8Array(CA_W * CA_H);
             bgRowColors = new Uint8Array(CA_H);
-            
+
             caData[Math.floor(CA_W / 2)] = 1;
 
             generateGeometry();
@@ -405,10 +413,10 @@
         function updateTargetHUD() {
             tCtx.clearRect(0, 0, 120, 30);
             let remaining = 4 - gameState.targetsSunk;
-            
+
             for (let i = 0; i < remaining; i++) {
                 let cx = 15 + i * 30;
-                
+
                 // Base target ball is grey
                 tCtx.fillStyle = '#888888';
                 tCtx.beginPath(); tCtx.arc(cx, 15, 12, 0, Math.PI * 2); tCtx.fill();
@@ -421,7 +429,7 @@
                 let colorIndex = (targetMunkerIndex + (4 - remaining) + i) % 4; 
                 let c1 = `rgb(${currentPalette[colorIndex].join(',')})`;
                 let c2 = `rgb(${currentPalette[(colorIndex+2)%4].join(',')})`;
-                
+
                 tCtx.fillStyle = c1;
                 tCtx.fillRect(cx - 15, 3, 30, 4);
                 tCtx.fillRect(cx - 15, 23, 30, 4);
@@ -437,7 +445,7 @@
             gameState.sinkHole = holePoint;
             gameState.transitionType = type;
             gameState.sinkingBall = ballRef;
-            
+
             if (gameState.bounces > gameState.best) {
                 gameState.best = gameState.bounces;
                 const uiBest = document.getElementById('ui-best');
@@ -457,7 +465,7 @@
 
         function nextDimension(isReset = false) {
             if (!isReset) gameState.dimension++;
-            
+
             const uiPanel = document.getElementById('ui-panel');
             if (uiPanel) {
                 uiPanel.style.borderColor = isReset ? '#f00' : '#f0f';
@@ -465,7 +473,7 @@
             }
 
             generateGeometry();
-            
+
             const uiDim = document.getElementById('ui-dim');
             if (uiDim) uiDim.innerText = `${gameState.dimension} (${boardShape.type})`;
 
@@ -485,7 +493,7 @@
             bData.fill(0);
             bgRowColors.fill(bgPaletteShift);
             impactRipples = []; 
-            
+
             if (caData.length > 0) caData[Math.floor(CA_W / 2)] = 1;
 
             initBalls();
@@ -535,7 +543,7 @@
                 if (this.dead) return;
                 ctx.save();
                 ctx.translate(this.x, this.y);
-                
+
                 ctx.fillStyle = 'rgba(0,0,0,0.8)';
                 ctx.beginPath(); ctx.arc(4, 4, this.radius, 0, Math.PI * 2); ctx.fill();
 
@@ -567,16 +575,42 @@
 
         let balls = [];
         function initBalls() {
-            let cx = boardShape.cx;
-            let cy = boardShape.cy;
-            // Spawn 1 White, 1 Black, and 4 Identical Grey targets!
+            const cx = boardShape.cx;
+            const cy = boardShape.cy;
+            const BALL_R = 14;
+
+            // Compute true inscribed radius — shortest distance from centre to any wall.
+            // This is the real safe zone regardless of shape type.
+            function inscribedRadius() {
+                let minDist = Infinity;
+                const verts = boardShape.vertices;
+                for (let i = 0; i < verts.length; i++) {
+                    const A = verts[i];
+                    const B = verts[(i + 1) % verts.length];
+                    const dx = B.x - A.x, dy = B.y - A.y;
+                    const len2 = dx*dx + dy*dy;
+                    if (len2 === 0) continue;
+                    const t = Math.max(0, Math.min(1, ((cx - A.x)*dx + (cy - A.y)*dy) / len2));
+                    const closestX = A.x + t*dx;
+                    const closestY = A.y + t*dy;
+                    const d = Math.hypot(cx - closestX, cy - closestY);
+                    if (d < minDist) minDist = d;
+                }
+                return minDist === Infinity ? boardShape.r * 0.4 : minDist;
+            }
+
+            const safeR = inscribedRadius();
+            // Spread scales with safe zone — always fits inside actual playable area
+            const spread = Math.max(BALL_R * 2.5, Math.min(safeR * 0.6, 55));
+            const whiteDist = Math.min(spread * 1.4, safeR * 0.75);
+
             balls = [
-                new Ball(cx, cy, 0, 0, 14, 'BLACK', '#222222'),
-                new Ball(cx - 30, cy - 30, 0, 0, 14, 'TARGET', '#888888'),
-                new Ball(cx + 30, cy - 30, 0, 0, 14, 'TARGET', '#888888'),
-                new Ball(cx - 30, cy + 30, 0, 0, 14, 'TARGET', '#888888'),
-                new Ball(cx + 30, cy + 30, 0, 0, 14, 'TARGET', '#888888'),
-                new Ball(cx, cy + 80, 0, 0, 14, 'WHITE', '#ffffff')
+                new Ball(cx,          cy,           0, 0, BALL_R, 'BLACK',  '#222222'),
+                new Ball(cx - spread, cy - spread,  0, 0, BALL_R, 'TARGET', '#888888'),
+                new Ball(cx + spread, cy - spread,  0, 0, BALL_R, 'TARGET', '#888888'),
+                new Ball(cx - spread, cy + spread,  0, 0, BALL_R, 'TARGET', '#888888'),
+                new Ball(cx + spread, cy + spread,  0, 0, BALL_R, 'TARGET', '#888888'),
+                new Ball(cx,          cy + whiteDist, 0, 0, BALL_R, 'WHITE', '#ffffff')
             ];
             updateTargetHUD();
         }
@@ -594,10 +628,10 @@
                 }
                 bgRowColors[y] = bgRowColors[y - 1]; 
             }
-            
+
             bgRowColors[0] = bgPaletteShift;
             let activeRule = bgRule; 
-            
+
             if (micEnabled && currentAudioLevel > 15 && harmonicSpectrum > 5) {
                 activeRule = Math.floor(harmonicSpectrum * 2.55);
             } 
@@ -657,10 +691,10 @@
                         let dy = y - B_CA_SIZE/2;
                         let angle = Math.atan2(dy, dx);
                         let dist = Math.hypot(dx, dy);
-                        
+
                         let bin = Math.floor((Math.abs(angle) / Math.PI) * (dataArray.length / 4));
                         let amp = dataArray[bin] || 0;
-                        
+
                         if (amp > 100 && Math.abs(dist - (amp/255) * (B_CA_SIZE/2)) < 2) {
                              trailData[y * B_CA_SIZE + x] = 255;
                         }
@@ -676,13 +710,13 @@
                 for (let x = 0; x < B_CA_SIZE; x++) {
                     let i = y * B_CA_SIZE + x;
                     let prevVal = bData[i]; 
-                    
+
                     let sx = Math.floor((x - B_CA_SIZE/2) / scale);
                     let sy = Math.floor((y - B_CA_SIZE/2) / scale);
 
                     let vMath = 0;
                     const ruleMod = currentRule % 8;
-                    
+
                     if (ruleMod === 0) vMath = (sx ^ sy) ^ prevVal;                           
                     else if (ruleMod === 1) vMath = (sx & sy) ^ (prevVal * 2);                      
                     else if (ruleMod === 2) vMath = (sx | sy) ^ prevVal;                      
@@ -691,16 +725,16 @@
                     else if (ruleMod === 5) vMath = (sx * prevVal) ^ (sy * prevVal);                
                     else if (ruleMod === 6) vMath = (sx+sy) ^ (sx-sy) ^ prevVal; 
                     else if (ruleMod === 7) vMath = Math.abs(sx ^ sy) * 2 ^ prevVal; 
-                    
+
                     let val = Math.abs(vMath - t*3 + trailData[i]*1.5);
                     bDataNext[i] = val % 256;
-                    
+
                     let colorShift = Math.floor(frameCount / 15);
                     let colorIndex = (Math.floor(bDataNext[i] / 64) + colorShift) % 4; 
-                    
+
                     const c = currentPalette[colorIndex];
                     let r = c[0], g = c[1], b = c[2];
-                    
+
                     if (trailData[i] > 200) {
                         r = 255; g = 255; b = 0; 
                     } else if (trailData[i] > 50) {
@@ -737,14 +771,14 @@
             ctx.save();
             drawShapePath(ctx, boardShape);
             ctx.clip(); 
-            
+
             const stripeH = 3; 
             const gap = 3;
-            
+
             for (let y = boardRect.y; y < boardRect.y + boardRect.size; y += (stripeH + gap) * 2) {
                 ctx.fillStyle = currentMunkerPair[0]; 
                 ctx.fillRect(boardRect.x, y, boardRect.size, stripeH);
-                
+
                 ctx.fillStyle = currentMunkerPair[1];
                 ctx.fillRect(boardRect.x, y + stripeH + gap, boardRect.size, stripeH);
             }
@@ -818,7 +852,7 @@
             }
 
             if (frameCount % 4 === 0) updateBackgroundRuliad();
-            
+
             ctx.fillStyle = '#000';
             ctx.fillRect(0, 0, WIDTH, HEIGHT);
 
@@ -833,17 +867,17 @@
             for (let i = impactRipples.length - 1; i >= 0; i--) {
                 let rip = impactRipples[i];
                 rip.r += 12; 
-                
+
                 ctx.beginPath();
                 ctx.arc(rip.x, rip.y, rip.r, 0, Math.PI * 2);
-                
+
                 let c = currentPalette[(2 + rip.colorShift) % 4];
                 let alpha = Math.max(0, 1 - (rip.r / (Math.max(WIDTH, HEIGHT) * 0.8)));
-                
+
                 ctx.strokeStyle = `rgba(${c[0]}, ${c[1]}, ${c[2]}, ${alpha * 0.8})`;
                 ctx.lineWidth = 25; 
                 ctx.stroke();
-                
+
                 if (alpha <= 0) impactRipples.splice(i, 1);
             }
             ctx.restore();
@@ -851,27 +885,27 @@
             if (gameState.state === 'TRANSITION') {
                 gameState.transitionTimer--;
                 let prog = 1 - (gameState.transitionTimer / 150); 
-                
+
                 let isGameOver = gameState.transitionType === 'GAMEOVER';
                 let transColor = isGameOver ? '0, 0, 0' : '0, 0, 0';
-                
+
                 ctx.fillStyle = `rgba(${transColor},${Math.min(1, prog * 1.5)})`;
                 ctx.fillRect(0, 0, WIDTH, HEIGHT);
 
                 let cx = gameState.sinkHole.x;
                 let cy = gameState.sinkHole.y;
-                
+
                 for (let i = 0; i < 15; i++) {
                     let ringT = (i / 15 + prog * 4) % 1; 
                     let scale = Math.pow(ringT, 4) * 6; 
                     let alpha = 1 - Math.abs(ringT - 0.5) * 2;
-                    
+
                     ctx.save();
                     ctx.translate(cx, cy); 
                     ctx.scale(scale, scale);
                     ctx.rotate(prog * Math.PI * 2 + ringT * Math.PI);
                     ctx.translate(-cx, -cy);
-                    
+
                     ctx.globalAlpha = Math.max(0, alpha);
                     let cIndex = i % 4;
                     if (isGameOver) {
@@ -893,7 +927,7 @@
                     gameState.sinkingBall.draw(ctx);
                     ctx.restore();
                 }
-                
+
                 ctx.fillStyle = isGameOver ? '#ff0000' : '#fff';
                 ctx.font = '24px "Press Start 2P"';
                 ctx.textAlign = 'center';
@@ -914,17 +948,17 @@
                         nextDimension();
                     }
                 }
-                
+
                 requestAnimationFrame(loop);
                 return; 
             }
 
             // === NORMAL PLAY: PHYSICS RESOLUTION ===
             updateBoardRuliad();
-            
+
             const subSteps = 4;
             const dt = 1 / subSteps;
-            
+
             for (let step = 0; step < subSteps; step++) {
                 // 1. Update ball positions and Wall Collisions
                 balls.forEach(b => {
@@ -938,11 +972,11 @@
 
                     let hitWallThisFrame = false;
                     let overlapOffset = {x: 0, y: 0};
-                    
+
                     for(let i=0; i<boardShape.vertices.length; i++) {
                         let A = boardShape.vertices[i];
                         let B = boardShape.vertices[(i+1)%boardShape.vertices.length];
-                        
+
                         let dx = B.x - A.x; let dy = B.y - A.y;
                         let len2 = dx*dx + dy*dy;
                         if(len2 === 0) continue;
@@ -987,7 +1021,7 @@
                         // ANY ball hitting the wall now triggers visual ripples and background color shifts!
                         bgPaletteShift = (bgPaletteShift + 1) % 4;
                         impactRipples.push({x: b.x, y: b.y, r: 0, colorShift: bgPaletteShift});
-                        
+
                         gameState.bounces++;
                         const uiWinding = document.getElementById('ui-winding');
                         if(uiWinding) uiWinding.innerText = gameState.bounces;
@@ -1007,13 +1041,13 @@
                         if (dist < minDist && dist > 0) {
                             let overlap = minDist - dist;
                             let nx = dx / dist; let ny = dy / dist;
-                            
+
                             b1.x -= nx * overlap / 2; b1.y -= ny * overlap / 2;
                             b2.x += nx * overlap / 2; b2.y += ny * overlap / 2;
 
                             let kx = b1.vx - b2.vx; let ky = b1.vy - b2.vy;
                             let p = (nx * kx + ny * ky); 
-                            
+
                             if (p > 0) { 
                                 b1.vx -= p * nx; b1.vy -= p * ny;
                                 b2.vx += p * nx; b2.vy += p * ny;
@@ -1044,6 +1078,13 @@
                                 if (gameState.targetsSunk >= 4) {
                                     triggerTransition(b.targetPocket, 'NEXT', b); 
                                 }
+                            } else if (b.type === 'BLACK') {
+                                // 8-ball sunk — respawn at centre, don't end game
+                                b.isSinking = false;
+                                b.x = boardShape.cx;
+                                b.y = boardShape.cy;
+                                b.vx = (Math.random() - 0.5) * 2;
+                                b.vy = (Math.random() - 0.5) * 2;
                             } else {
                                 triggerTransition(b.targetPocket, 'GAMEOVER', b); 
                             }
@@ -1056,7 +1097,7 @@
                     } else {
                         for (let p of boardShape.pockets) {
                             let dist = Math.hypot(p.x - b.x, p.y - b.y);
-                            
+
                             let pullRadius = POCKET_RADIUS * 2.5; 
                             if (dist < pullRadius && dist > POCKET_RADIUS * 1.5) {
                                 let gravity = 1.0 * (1 - dist / pullRadius) * dt; 
@@ -1069,7 +1110,7 @@
                                 break;
                             }
                         }
-                        
+
                         const caX = Math.floor(((b.x - boardRect.x) / boardRect.size) * B_CA_SIZE);
                         const caY = Math.floor(((b.y - boardRect.y) / boardRect.size) * B_CA_SIZE);
                         let injectionHeat = 120; 
@@ -1088,14 +1129,14 @@
             // === DRAW FRAME ===
             drawBoard();
             balls.forEach(b => b.draw(ctx));
-            
+
             // DRAW CUE AIMING LINE
             if (mouse.isDragging && gameState.state === 'PLAYING') {
                 let whiteBall = balls.find(b => b.type === 'WHITE');
                 if (whiteBall && !whiteBall.isSinking && !whiteBall.dead) {
                     let dx = mouse.startX - mouse.x;
                     let dy = mouse.startY - mouse.y;
-                    
+
                     ctx.save();
                     ctx.beginPath();
                     ctx.moveTo(whiteBall.x, whiteBall.y);
@@ -1104,7 +1145,7 @@
                     ctx.lineWidth = 3;
                     ctx.setLineDash([5, 5]);
                     ctx.stroke();
-                    
+
                     ctx.beginPath();
                     ctx.arc(whiteBall.x + dx, whiteBall.y + dy, 5, 0, Math.PI * 2);
                     ctx.fillStyle = 'rgba(255, 255, 255, 0.5)';
